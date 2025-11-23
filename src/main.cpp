@@ -41,8 +41,9 @@ struct MeasurementFrame {
 
 std::vector<Measurement> collectedMeasurements;
 
-constexpr int restartDelayMs = 45000;
-constexpr int requestDelayMs = 5000;
+constexpr int requestDelayMs = 5000; // time to wait before requesting history
+constexpr int collectDelayMs = 5000; // time to wait to collect measurements from notifications
+constexpr int restartDelayMs = 45000; // time to wait before the next scan
 constexpr size_t mqttBufferSize = 1024;
 constexpr size_t measurementFrameLength = 15;
 constexpr uint8_t measurementOpcode = 0x09;
@@ -178,6 +179,7 @@ const User* resolveUserByWeight(float weightKg, String& userName) {
     return nullptr;
 }
 
+// this function get's called for each measurement notification
 void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
     // logHexPayload(pData, length);
 
@@ -386,7 +388,7 @@ void startScan() {
     // pBLEScan->setActiveScan(true);
     if(pBLEScan->start(0, false)) {
         isScanning = true;
-        Serial.println("BLE scan started successfully");
+        Serial.println("BLE scan started successfully, wating for scale device...");
     } else {
         Serial.println("Failed to start scan");
         isScanning = false;
@@ -423,20 +425,6 @@ void syncTime() {
         Serial.println("Failed to sync time");
     }
     disconnectFromWifi();
-}
-
-void setup() {
-    Serial.begin(115200);
-    delay(4000);  // Wait for CDC Serial to initialize
-
-    mqttClient.setBufferSize(mqttBufferSize);
-    mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
-
-    syncTime();
-    
-    NimBLEDevice::init("ESP32_SCALE");
-    startScan();
-    Serial.println("Scan started...");
 }
 
 void checkRestart() {
@@ -490,6 +478,22 @@ void cleanupBleSession() {
     collectedMeasurements.clear();
     scaleConnected = false;
     historyRequested = false;
+
+    // disable BLE to free memory
+    // NimBLEDevice::deinit();
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(4000);  // Wait for CDC Serial to initialize
+
+    mqttClient.setBufferSize(mqttBufferSize);
+    mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
+
+    syncTime();
+    
+    NimBLEDevice::init("ESP32_SCALE");
+    startScan();
 }
 
 void loop() {
@@ -500,7 +504,7 @@ void loop() {
             requestHistoryForAllUsers();
         }
 
-        if (millis() - connectionTime > requestDelayMs + 5000) {
+        if (millis() - connectionTime > requestDelayMs + collectDelayMs) {
             String jsonString;
             const bool hasMeasurement = buildLatestMeasurementJson(jsonString);
             Serial.println(jsonString);
@@ -525,16 +529,14 @@ void loop() {
                 Serial.println("Skipping MQTT publish: no measurements collected");
             }
 
-            Serial.println("Waiting 40 seconds before restarting...");
+            Serial.println("Waiting 45 seconds before restarting...");
             delay(restartDelayMs);
         }
         return;
     }
 
     if (scaleDevice != nullptr) {
-        if (connectToScaleDevice()) {
-            Serial.println("Connected to scale device");
-        } else {
+        if (!connectToScaleDevice()) {
             Serial.println("Failed to connect, restarting scan...");
             delete scaleDevice;
             scaleDevice = nullptr;
