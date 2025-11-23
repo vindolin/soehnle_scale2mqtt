@@ -44,6 +44,9 @@ std::vector<Measurement> collectedMeasurements;
 constexpr int requestDelayMs = 5000; // time to wait before requesting history
 constexpr int collectDelayMs = 5000; // time to wait to collect measurements from notifications
 constexpr int restartDelayMs = 45000; // time to wait before the next scan
+// constexpr int serialStartupDelay = 4000; // time to wait for Serial to initialize
+constexpr int serialStartupDelay = 5000; // time to wait for Serial to initialize
+
 constexpr size_t mqttBufferSize = 1024;
 constexpr size_t measurementFrameLength = 15;
 constexpr uint8_t measurementOpcode = 0x09;
@@ -55,8 +58,11 @@ const char* ntpServer = "fritz.box";
 const long  gmtOffset_sec = 3600;
 const int   daylightOffset_sec = 3600;
 
-const char* dataPublishTopic = "smartscale/data";
+const char* bootTimeTopic = "smartscale/bootTime";
 const char* batteryLevelTopic = "smartscale/battery";
+
+const char* dataTopic = "smartscale/measurement";
+const char* dataTimeTopic = "smartscale/measurementTime";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -196,9 +202,14 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
         return;
     }
 
-    float fat = get_fat(*user, frame.weightKg, frame.imp50);
-    float water = get_water(*user, frame.weightKg, frame.imp50);
-    float muscle = get_muscle(*user, frame.weightKg, frame.imp50, frame.imp5);
+    float fat = 0.0f;
+    float water = 0.0f;
+    float muscle = 0.0f;
+    if(frame.imp50 > 0) {
+        fat = get_fat(*user, frame.weightKg, frame.imp50);
+        water = get_water(*user, frame.weightKg, frame.imp50);
+        muscle = get_muscle(*user, frame.weightKg, frame.imp50, frame.imp5);
+    }
 
     char timeStr[25];
     snprintf(timeStr, sizeof(timeStr), "%04d-%02d-%02dT%02d:%02d:%02dZ", frame.year, frame.month, frame.day, frame.hour, frame.minute, frame.second);
@@ -339,7 +350,13 @@ class MyScanCallbacks: public NimBLEScanCallbacks {
 };
 
 void connectToMqtt() {
+    uint connectAttempts = 0;
     while (!mqttClient.connected()) {
+        if (connectAttempts > 5) {
+            ESP.restart();
+        }
+        connectAttempts++;
+
         Serial.println("Attempting MQTT connection...");
         if (mqttClient.connect("ESP32ScaleClient", MQTT_SERVER_USER, MQTT_SERVER_PASSWORD)) {
             Serial.println("MQTT connected");
@@ -364,8 +381,14 @@ void connectToWifi() {
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+    uint connectAttempts = 0;
     while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
+        if (connectAttempts > 5) {
+            ESP.restart();
+        }
+        connectAttempts++;
+
+        delay(1000);
         Serial.print(".");
     }
 
@@ -385,7 +408,6 @@ void startScan() {
     pBLEScan->setScanCallbacks(new MyScanCallbacks());
     // pBLEScan->setInterval(45);
     // pBLEScan->setWindow(15);
-    // pBLEScan->setActiveScan(true);
     if(pBLEScan->start(0, false)) {
         isScanning = true;
         Serial.println("BLE scan started successfully, wating for scale device...");
@@ -413,6 +435,17 @@ void requestHistoryForAllUsers() {
     }
 }
 
+String buildCurrentTimeString() {
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    if (localtime_r(&now, &timeinfo) != nullptr) {
+        char buffer[25];
+        strftime(buffer, sizeof(buffer), "%d.%m.%Y - %H:%M:%S ", &timeinfo);
+        return String(buffer);
+    }
+    return String(now);
+}
+
 void syncTime() {
     connectToWifi();
 
@@ -420,6 +453,12 @@ void syncTime() {
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
+        connectToMqtt();
+        mqttClient.publish(bootTimeTopic, buildCurrentTimeString().c_str());
+        mqttClient.loop();
+        delay(1000); // wait for publish
+        disconnectFromMqtt();
+
         Serial.println(&timeinfo, "Time synced: %A, %B %d %Y %H:%M:%S");
     } else {
         Serial.println("Failed to sync time");
@@ -485,7 +524,7 @@ void cleanupBleSession() {
 
 void setup() {
     Serial.begin(115200);
-    delay(4000);  // Wait for CDC Serial to initialize
+    delay(serialStartupDelay);  // Wait for CDC Serial to initialize
 
     mqttClient.setBufferSize(mqttBufferSize);
     mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
@@ -515,8 +554,11 @@ void loop() {
             if (hasMeasurement) {
                 connectToWifi();
                 connectToMqtt();
-                if (mqttClient.publish(dataPublishTopic, jsonString.c_str())) {
+                if (mqttClient.publish(dataTopic, jsonString.c_str())) {
                     mqttClient.publish(batteryLevelTopic, String(batteryLevel).c_str());
+                    // publish time
+                    const String timeString = buildCurrentTimeString();
+                    mqttClient.publish(dataTimeTopic, timeString.c_str());
                     Serial.println("Data published to MQTT");
                 } else {
                     Serial.println("Failed to publish data");
