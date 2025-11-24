@@ -11,6 +11,8 @@
 #include <NimBLEScan.h>
 #include <PubSubClient.h>
 
+constexpr auto BLUE_LED_PIN = 8;
+
 struct User {
     int age;
     float height;
@@ -41,15 +43,14 @@ struct MeasurementFrame {
     uint16_t imp50;
 };
 
-constexpr auto REQUEST_DELAY_MS = 5000; // time to wait before requesting history
+constexpr auto REQUEST_DELAY_MS = 15000; // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 5000; // time to wait to collect measurements from notifications
-constexpr auto RESTART_DELAY_MS = 45000; // time to wait before the next scan
+constexpr auto LONG_RESTART_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
 // constexpr int SERIAL_STARTUP_DELAY = 4000; // time to wait for Serial to initialize
 constexpr auto SERIAL_STARTUP_DELAY = 1000; // time to wait for Serial to initialize
 constexpr size_t MQTT_BUFFER_SIZE = 1024;
 
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
-constexpr uint8_t MEASUREMENT_OPCODE = 0x09;
 
 const char* SCALE_DEVICE_NAME = "Shape100";
 
@@ -115,9 +116,17 @@ static NimBLEUUID SVC_SOEHNLE("352e3000-28e9-40b8-a361-6db4cca4147c");
 static NimBLEUUID CHR_SOEHNLE_A("352e3001-28e9-40b8-a361-6db4cca4147c"); // Measurements
 static NimBLEUUID CHR_SOEHNLE_CMD("352e3002-28e9-40b8-a361-6db4cca4147c"); // Commands
 
+constexpr auto MEASUREMENT_OPCODE = 0x09;
+
 NimBLEAdvertisedDevice* scaleDevice = nullptr;
 
 uint8_t batteryLevel = 0;
+
+Measurement lastPublishedMeasurement;
+
+void setLed(bool on) {
+    digitalWrite(BLUE_LED_PIN, on ? LOW : HIGH);
+}
 
 // https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
 float get_fat(const User& user, float weight, float imp50) {
@@ -236,6 +245,7 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     Serial.printf("%5s (%d) at %s: weight=%.1f kg, fat=%.1f %%, water=%.1f %%, muscle=%.1f %%\n",
                   m.user.c_str(), m.pID, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
 
+    // we keep only the latest measurement from the notifications
     if(latestMeasurement.time.isEmpty() || m.time > latestMeasurement.time) {
         latestMeasurement = m;
     }
@@ -331,10 +341,8 @@ bool connectToScaleDevice() {
         NimBLERemoteCharacteristic* pChrSoehnleA = pSvcSoehnle->getCharacteristic(CHR_SOEHNLE_A);
         if (pChrSoehnleA && pChrSoehnleA->canNotify()) {
             pChrSoehnleA->subscribe(true, notifyMeasurement);
-            Serial.println("Subscribed to measurements");
+            Serial.println("Subscribed to measurements, waiting 15 seconds for history request...");
         }
-        
-        // History request moved to loop
     }
 
     return true;
@@ -377,8 +385,8 @@ void connectToMqtt() {
         } else {
             Serial.print("failed, rc=");
             Serial.print(mqttClient.state());
-            Serial.println(" try again in 5 seconds");
-            delay(5000);
+            Serial.println(" try again in 2 seconds");
+            delay(2000);
         }
     }
 }
@@ -420,12 +428,12 @@ void disconnectFromWifi() {
 void startScan() {
     NimBLEScan* pBLEScan = NimBLEDevice::getScan();
     pBLEScan->setScanCallbacks(new BLEScanCallbacks());
-    // pBLEScan->setInterval(45);
-    // pBLEScan->setWindow(15);
     if(pBLEScan->start(0, false)) {
         Serial.println("BLE scan started successfully, wating for scale device...");
+        setLed(true);
     } else {
         Serial.println("Failed to start scan");
+        setLed(false);
     }
 }
 
@@ -438,7 +446,7 @@ void requestHistoryForAllUsers() {
         if (pChrSoehnleCmd) {
              Serial.println("Requesting history for all users...");
              for (int i = 1; i <= userCount; i++) {
-                 uint8_t cmd[] = {0x09, (uint8_t)i};
+                 uint8_t cmd[] = {MEASUREMENT_OPCODE, (uint8_t)i};
                  pChrSoehnleCmd->writeValue(cmd, 2, true);
                  delay(100);
              }
@@ -447,7 +455,7 @@ void requestHistoryForAllUsers() {
 }
 
 String buildCurrentTimeString() {
-    auto now = time(nullptr);
+    time_t now = time(nullptr);
     struct tm timeinfo;
     if (localtime_r(&now, &timeinfo) != nullptr) {
         char buffer[25];
@@ -528,6 +536,11 @@ void setup() {
     Serial.begin(115200);
     delay(SERIAL_STARTUP_DELAY);  // Wait for CDC Serial to initialize
 
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    setLed(false);
+
+    // setLed(false);
+    
     mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
     mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
 
@@ -552,6 +565,7 @@ void loop() {
             break;
 
         case AppState::CONNECTING:
+            setLed(false);
             latestMeasurement = Measurement(); // Clear previous measurement
             if (connectToScaleDevice()) {
                 currentState = AppState::CONNECTED_WAIT;
@@ -568,7 +582,7 @@ void loop() {
 
         case AppState::CONNECTED_WAIT:
             if (!pClient || !pClient->isConnected()) {
-                 Serial.println("Lost connection during wait");
+                 Serial.println("Lost connection during wait!");
                  cleanupBleSession();
                  currentState = AppState::SCANNING;
                  break;
@@ -586,12 +600,19 @@ void loop() {
 
         case AppState::COLLECTING:
             if (!pClient || !pClient->isConnected()) {
-                 Serial.println("Lost connection during collecting");
+                 Serial.println("Lost connection during collecting!");
                  cleanupBleSession();
                  currentState = AppState::SCANNING;
                  break;
             }
             if (millis() - stateTimer > COLLECT_DELAY_MS) {
+                if (latestMeasurement.time == lastPublishedMeasurement.time) {
+                    Serial.println("No new measurements received, restarting scan in 40 seconds...");
+                    cleanupBleSession();
+                    currentState = AppState::WAITING;
+                    break;
+                }
+                lastPublishedMeasurement = latestMeasurement;
                 currentState = AppState::PUBLISHING;
             }
             break;
@@ -608,16 +629,17 @@ void loop() {
                     connectToWifi();
                     connectToMqtt();
                     if (mqttClient.publish(MEASUREMENT_TOPIC, jsonString.c_str())) {
-                        mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str());
-                        // publish time
-                        const String timeString = buildCurrentTimeString();
-                        mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str());
                         Serial.println("Data published to MQTT");
                     } else {
                         Serial.println("Failed to publish data");
                     }
+                    mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str());
+
+                    const String timeString = buildCurrentTimeString();
+                    mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str());
+
                     mqttClient.loop();
-                    delay(1000); // wait for publish
+                    delay(100); // wait for publish
                     disconnectFromMqtt();
                     // disconnectFromWifi();
                 } else {
@@ -625,14 +647,14 @@ void loop() {
                     cleanupBleSession();
                 }
 
-                Serial.println("Waiting 45 seconds before restarting...");
+                Serial.println("Waiting 40 seconds before restarting...");
                 currentState = AppState::WAITING;
                 stateTimer = millis();
             }
             break;
 
         case AppState::WAITING:
-            if (millis() - stateTimer > RESTART_DELAY_MS) {
+            if (millis() - stateTimer > LONG_RESTART_DELAY_MS) {
                 currentState = AppState::SCANNING;
             }
             break;
