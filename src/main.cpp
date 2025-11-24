@@ -21,11 +21,11 @@ struct User {
 struct Measurement {
     String user;
     String time;
-    uint8_t userIndex;
-    float weight;
-    float fat;
-    float water;
-    float muscle;
+    uint8_t pID = 0;
+    float weight = 0.0;
+    float fat = 0.0;
+    float water = 0.0;
+    float muscle = 0.0;
 };
 
 struct MeasurementFrame {
@@ -41,28 +41,26 @@ struct MeasurementFrame {
     uint16_t imp50;
 };
 
-constexpr int requestDelayMs = 5000; // time to wait before requesting history
-constexpr int collectDelayMs = 5000; // time to wait to collect measurements from notifications
-constexpr int restartDelayMs = 45000; // time to wait before the next scan
-// constexpr int serialStartupDelay = 4000; // time to wait for Serial to initialize
-constexpr int serialStartupDelay = 1000; // time to wait for Serial to initialize
+constexpr auto REQUEST_DELAY_MS = 5000; // time to wait before requesting history
+constexpr auto COLLECT_DELAY_MS = 5000; // time to wait to collect measurements from notifications
+constexpr auto RESTART_DELAY_MS = 45000; // time to wait before the next scan
+// constexpr int SERIAL_STARTUP_DELAY = 4000; // time to wait for Serial to initialize
+constexpr auto SERIAL_STARTUP_DELAY = 1000; // time to wait for Serial to initialize
+constexpr size_t MQTT_BUFFER_SIZE = 1024;
 
-constexpr size_t mqttBufferSize = 1024;
-constexpr size_t measurementFrameLength = 15;
-constexpr uint8_t measurementOpcode = 0x09;
+constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
+constexpr uint8_t MEASUREMENT_OPCODE = 0x09;
 
 const char* SCALE_DEVICE_NAME = "Shape100";
 
-const char* ntpServer = "fritz.box";
+const auto GMT_OFFSET_SEC = 3600;
+const auto DAYLIGHT_OFFSET_SEC = 3600;
 
-const long  gmtOffset_sec = 3600;
-const int   daylightOffset_sec = 3600;
+const char* BOOT_TIME_TOPIC = "smartscale/bootTime";
+const char* BATTERY_LEVEL_TOPIC = "smartscale/battery";
 
-const char* bootTimeTopic = "smartscale/bootTime";
-const char* batteryLevelTopic = "smartscale/battery";
-
-const char* dataTopic = "smartscale/measurement";
-const char* dataTimeTopic = "smartscale/measurementTime";
+const char* MEASUREMENT_TOPIC = "smartscale/measurement";
+const char* MEASUREMENT_TIME_TOPIC = "smartscale/measurementTime";
 
 Measurement latestMeasurement;
 
@@ -88,11 +86,19 @@ std::vector<UserDetectionRule> detectionRules = {
 
 uint8_t userCount = static_cast<uint8_t>(detectionRules.size());
 
-bool isScanning = false;
-bool scaleConnected = false;
-bool taskCompleted = false;
-bool historyRequested = false;
-unsigned long connectionTime = 0;
+enum class AppState {
+    SCANNING,
+    CONNECTING,
+    CONNECTED_WAIT,
+    REQUEST_HISTORY,
+    COLLECTING,
+    PUBLISHING,
+    WAITING
+};
+
+AppState currentState = AppState::SCANNING;
+unsigned long stateTimer = 0;
+
 NimBLEClient* pClient = nullptr;
 
 // --- UUIDs ---
@@ -158,7 +164,7 @@ void logHexPayload(const uint8_t* data, size_t length) {
 }
 
 bool parseMeasurementFrame(const uint8_t* data, size_t length, MeasurementFrame& frame) {
-    if (length != measurementFrameLength || data[0] != measurementOpcode) {
+    if (length != MEASUREMENT_FRAME_LENGTH || data[0] != MEASUREMENT_OPCODE) {
         return false;
     }
 
@@ -205,9 +211,9 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
         return;
     }
 
-    float fat = 0.0f;
-    float water = 0.0f;
-    float muscle = 0.0f;
+    auto fat = 0.0;
+    auto water = 0.0;
+    auto muscle = 0.0;
     if(frame.imp50 > 0) {
         fat = get_fat(*user, frame.weightKg, frame.imp50);
         water = get_water(*user, frame.weightKg, frame.imp50);
@@ -219,7 +225,7 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
 
     Measurement m;
 
-    m.userIndex = frame.pID;
+    m.pID = frame.pID;
     m.user = userName;
     m.time = timeStr;
     m.weight = frame.weightKg;
@@ -228,7 +234,7 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     m.muscle = muscle;
 
     Serial.printf("%5s (%d) at %s: weight=%.1f kg, fat=%.1f %%, water=%.1f %%, muscle=%.1f %%\n",
-                  m.user.c_str(), m.userIndex, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
+                  m.user.c_str(), m.pID, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
 
     if(latestMeasurement.time.isEmpty() || m.time > latestMeasurement.time) {
         latestMeasurement = m;
@@ -244,14 +250,10 @@ void notifyBattery(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* p
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* pClient) {
         Serial.println("Connected to scale");
-        scaleConnected = true;
-        historyRequested = false;
-        connectionTime = millis();
     }
 
     void onDisconnect(NimBLEClient* pClient) {
         Serial.println("Disconnected");
-        scaleConnected = false;
         // We don't delete the client here, we'll handle it in the loop
     }
 };
@@ -264,6 +266,8 @@ bool connectToScaleDevice() {
 
     if (!pClient->connect(scaleDevice)) {
         Serial.println("Failed to connect");
+        NimBLEDevice::deleteClient(pClient);
+        pClient = nullptr;
         return false;
     }
 
@@ -344,7 +348,7 @@ bool disconnectFromScaleDevice() {
     return false;
 }
 
-class MyScanCallbacks: public NimBLEScanCallbacks {
+class BLEScanCallbacks: public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* advertisedDevice) {
         if (advertisedDevice->haveName()) {
             String name = advertisedDevice->getName().c_str();
@@ -353,7 +357,6 @@ class MyScanCallbacks: public NimBLEScanCallbacks {
                 Serial.printf("Found Scale: %s @ %s\n", name.c_str(), mac.c_str());
                 NimBLEDevice::getScan()->stop();
                 scaleDevice = new NimBLEAdvertisedDevice(*advertisedDevice);
-                isScanning = false;
                 return;
             }
         }
@@ -416,20 +419,17 @@ void disconnectFromWifi() {
 
 void startScan() {
     NimBLEScan* pBLEScan = NimBLEDevice::getScan();
-    pBLEScan->setScanCallbacks(new MyScanCallbacks());
+    pBLEScan->setScanCallbacks(new BLEScanCallbacks());
     // pBLEScan->setInterval(45);
     // pBLEScan->setWindow(15);
     if(pBLEScan->start(0, false)) {
-        isScanning = true;
         Serial.println("BLE scan started successfully, wating for scale device...");
     } else {
         Serial.println("Failed to start scan");
-        isScanning = false;
     }
 }
 
 void requestHistoryForAllUsers() {
-    historyRequested = true;
     if (pClient == nullptr) return;
 
     NimBLERemoteService* pSvcSoehnle = pClient->getService(SVC_SOEHNLE);
@@ -447,7 +447,7 @@ void requestHistoryForAllUsers() {
 }
 
 String buildCurrentTimeString() {
-    time_t now = time(nullptr);
+    auto now = time(nullptr);
     struct tm timeinfo;
     if (localtime_r(&now, &timeinfo) != nullptr) {
         char buffer[25];
@@ -461,11 +461,11 @@ void syncTime() {
     connectToWifi();
 
     // Sync time via NTP
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
         connectToMqtt();
-        mqttClient.publish(bootTimeTopic, buildCurrentTimeString().c_str());
+        mqttClient.publish(BOOT_TIME_TOPIC, buildCurrentTimeString().c_str());
         mqttClient.loop();
         delay(1000); // wait for publish
         disconnectFromMqtt();
@@ -496,7 +496,7 @@ bool generateMeasurementJson(String& outJson) {
     }
     DynamicJsonDocument doc(512);
 
-    doc["userIndex"] = latestMeasurement.userIndex;
+    doc["userIndex"] = latestMeasurement.pID;
     doc["user"] = latestMeasurement.user;
     doc["time"] = latestMeasurement.time;
     doc["weight"] = latestMeasurement.weight;
@@ -519,8 +519,6 @@ void cleanupBleSession() {
         delete scaleDevice;
         scaleDevice = nullptr;
     }
-    scaleConnected = false;
-    historyRequested = false;
 
     // disable BLE to free memory
     // NimBLEDevice::deinit();
@@ -528,66 +526,115 @@ void cleanupBleSession() {
 
 void setup() {
     Serial.begin(115200);
-    delay(serialStartupDelay);  // Wait for CDC Serial to initialize
+    delay(SERIAL_STARTUP_DELAY);  // Wait for CDC Serial to initialize
 
-    mqttClient.setBufferSize(mqttBufferSize);
+    mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
     mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
 
     syncTime();
     
     NimBLEDevice::init("ESP32_SCALE");
-    startScan();
 }
 
 void loop() {
     checkRestart();
 
-    if (scaleConnected) {
-        if (!historyRequested && (millis() - connectionTime > requestDelayMs)) {
-            requestHistoryForAllUsers();
-        }
-
-        if (millis() - connectionTime > requestDelayMs + collectDelayMs) {
-            String jsonString;
-            if (generateMeasurementJson(jsonString)) {
-                Serial.println(jsonString);
-
-                Serial.println("Data collection finished. Disconnecting BLE...");
-                cleanupBleSession();
-
-                connectToWifi();
-                connectToMqtt();
-                if (mqttClient.publish(dataTopic, jsonString.c_str())) {
-                    mqttClient.publish(batteryLevelTopic, String(batteryLevel).c_str());
-                    // publish time
-                    const String timeString = buildCurrentTimeString();
-                    mqttClient.publish(dataTimeTopic, timeString.c_str());
-                    Serial.println("Data published to MQTT");
-                } else {
-                    Serial.println("Failed to publish data");
-                }
-                mqttClient.loop();
-                delay(1000); // wait for publish
-                disconnectFromMqtt();
-                // disconnectFromWifi();
+    switch (currentState) {
+        case AppState::SCANNING:
+            if (scaleDevice != nullptr) {
+                currentState = AppState::CONNECTING;
             } else {
-                Serial.println("Skipping MQTT publish: no measurements collected");
+                NimBLEScan* pScan = NimBLEDevice::getScan();
+                if (!pScan->isScanning()) {
+                    startScan();
+                }
             }
+            break;
 
-            Serial.println("Waiting 45 seconds before restarting...");
-            delay(restartDelayMs);
-        }
-        return;
-    }
+        case AppState::CONNECTING:
+            latestMeasurement = Measurement(); // Clear previous measurement
+            if (connectToScaleDevice()) {
+                currentState = AppState::CONNECTED_WAIT;
+                stateTimer = millis();
+            } else {
+                Serial.println("Failed to connect, restarting scan...");
+                if (scaleDevice != nullptr) {
+                    delete scaleDevice;
+                    scaleDevice = nullptr;
+                }
+                currentState = AppState::SCANNING;
+            }
+            break;
 
-    if (scaleDevice != nullptr) {
-        if (!connectToScaleDevice()) {
-            Serial.println("Failed to connect, restarting scan...");
-            delete scaleDevice;
-            scaleDevice = nullptr;
-            startScan();
-        }
-    } else if (!isScanning) {
-        startScan();
+        case AppState::CONNECTED_WAIT:
+            if (!pClient || !pClient->isConnected()) {
+                 Serial.println("Lost connection during wait");
+                 cleanupBleSession();
+                 currentState = AppState::SCANNING;
+                 break;
+            }
+            if (millis() - stateTimer > REQUEST_DELAY_MS) {
+                currentState = AppState::REQUEST_HISTORY;
+            }
+            break;
+
+        case AppState::REQUEST_HISTORY:
+            requestHistoryForAllUsers();
+            currentState = AppState::COLLECTING;
+            stateTimer = millis();
+            break;
+
+        case AppState::COLLECTING:
+            if (!pClient || !pClient->isConnected()) {
+                 Serial.println("Lost connection during collecting");
+                 cleanupBleSession();
+                 currentState = AppState::SCANNING;
+                 break;
+            }
+            if (millis() - stateTimer > COLLECT_DELAY_MS) {
+                currentState = AppState::PUBLISHING;
+            }
+            break;
+
+        case AppState::PUBLISHING:
+            {
+                String jsonString;
+                if (generateMeasurementJson(jsonString)) {
+                    Serial.println(jsonString);
+
+                    Serial.println("Data collection finished. Disconnecting BLE...");
+                    cleanupBleSession();
+
+                    connectToWifi();
+                    connectToMqtt();
+                    if (mqttClient.publish(MEASUREMENT_TOPIC, jsonString.c_str())) {
+                        mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str());
+                        // publish time
+                        const String timeString = buildCurrentTimeString();
+                        mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str());
+                        Serial.println("Data published to MQTT");
+                    } else {
+                        Serial.println("Failed to publish data");
+                    }
+                    mqttClient.loop();
+                    delay(1000); // wait for publish
+                    disconnectFromMqtt();
+                    // disconnectFromWifi();
+                } else {
+                    Serial.println("Skipping MQTT publish: no measurements collected");
+                    cleanupBleSession();
+                }
+
+                Serial.println("Waiting 45 seconds before restarting...");
+                currentState = AppState::WAITING;
+                stateTimer = millis();
+            }
+            break;
+
+        case AppState::WAITING:
+            if (millis() - stateTimer > RESTART_DELAY_MS) {
+                currentState = AppState::SCANNING;
+            }
+            break;
     }
 }
