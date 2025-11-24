@@ -11,11 +11,15 @@
 
 #include "config.h"
 
+#include "config.h"
+
 constexpr auto BLUE_LED_PIN = 8;
 
 struct User {
     int age;
     float height;
+    bool isMale;
+    int activityLevel;
     bool isMale;
     int activityLevel;
 };
@@ -45,6 +49,10 @@ struct MeasurementFrame {
 
 constexpr auto REQUEST_DELAY_MS = 15000; // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 5000; // time to wait to collect measurements from notifications
+constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
+// constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to initialize
+constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
+
 constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
 // constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to initialize
 constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
@@ -128,8 +136,29 @@ Measurement lastPublishedMeasurement;
 void setLed(bool on) {
     digitalWrite(BLUE_LED_PIN, on ? LOW : HIGH);
 }
+
+
+
+bool isBlinking = false;
+unsigned long blinkLastToggle = 0;
+bool ledState = false;
+
+void updateLed() {
+    if (isBlinking) {
+        if (millis() - blinkLastToggle > 200) {
+            blinkLastToggle = millis();
+            ledState = !ledState;
+            setLed(ledState);
+        }
+    }
+}
+
 // Calculations based on OpenScale implementation
 // https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
+float calculateFat(const User& user, float weight, float imp50) {
+    float activityCorrFac = 0.0;
+    if (user.activityLevel == 4) activityCorrFac = user.isMale ? 2.5 : 2.3;
+    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 4.3 : 4.1;
 float calculateFat(const User& user, float weight, float imp50) {
     float activityCorrFac = 0.0;
     if (user.activityLevel == 4) activityCorrFac = user.isMale ? 2.5 : 2.3;
@@ -137,8 +166,12 @@ float calculateFat(const User& user, float weight, float imp50) {
 
     float sexCorrFac = user.isMale ? 0.250 : 0.214;
     float activitySexDiv = user.isMale ? 65.5 : 55.1;
+    float sexCorrFac = user.isMale ? 0.250 : 0.214;
+    float activitySexDiv = user.isMale ? 65.5 : 55.1;
 
     return (1.847 * weight * 10000.0 / (user.height * user.height) + 
+            sexCorrFac * user.age + 0.062 * imp50 - 
+            (activitySexDiv - activityCorrFac));
             sexCorrFac * user.age + 0.062 * imp50 - 
             (activitySexDiv - activityCorrFac));
 }
@@ -148,9 +181,15 @@ float calculateWater(const User& user, float weight, float imp50) {
     if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 2.83 : 0.0;
     else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 3.93 : 0.4;
     else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.33 : 1.4;
+float calculateWater(const User& user, float weight, float imp50) {
+    float activityCorrFac = 0.0;
+    if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 2.83 : 0.0;
+    else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 3.93 : 0.4;
+    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.33 : 1.4;
 
     return ((0.3674 * user.height * user.height / imp50 + 
             0.17530 * weight - 0.11 * user.age + 
+            (6.53 + activityCorrFac)) / weight * 100.0);
             (6.53 + activityCorrFac)) / weight * 100.0);
 }
 
@@ -159,9 +198,15 @@ float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
     if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 3.6224 : 0.0;
     else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 4.3904 : 0.0;
     else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.4144 : 1.664;
+float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
+    float activityCorrFac = 0.0;
+    if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 3.6224 : 0.0;
+    else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 4.3904 : 0.0;
+    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.4144 : 1.664;
 
     return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height + 
             0.13796 * weight - 0.1152 * user.age + 
+            (5.12 + activityCorrFac)) / weight * 100.0);
             (5.12 + activityCorrFac)) / weight * 100.0);
 }
 
@@ -225,6 +270,9 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     auto water = 0.0;
     auto muscle = 0.0;
     if(frame.imp50 > 0) {
+        fat = calculateFat(*user, frame.weightKg, frame.imp50);
+        water = calculateWater(*user, frame.weightKg, frame.imp50);
+        muscle = calculateMuscle(*user, frame.weightKg, frame.imp50, frame.imp5);
         fat = calculateFat(*user, frame.weightKg, frame.imp50);
         water = calculateWater(*user, frame.weightKg, frame.imp50);
         muscle = calculateMuscle(*user, frame.weightKg, frame.imp50, frame.imp5);
@@ -472,6 +520,7 @@ String buildCurrentTimeString() {
 
 void syncTime() {
     connectToWifi();
+    delay(100);
 
     // Sync time via NTP
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
@@ -540,6 +589,7 @@ void cleanupBleSession() {
 void setup() {
     Serial.begin(115200);
     delay(SERIAL_STARTUP_DELAY_MS);  // Wait for CDC Serial to initialize
+    delay(SERIAL_STARTUP_DELAY_MS);  // Wait for CDC Serial to initialize
 
     pinMode(BLUE_LED_PIN, OUTPUT);
     setLed(false);
@@ -554,6 +604,7 @@ void setup() {
 
 void loop() {
     checkRestart();
+    updateLed();
 
     switch (currentState) {
         case AppState::SCANNING:
@@ -596,6 +647,7 @@ void loop() {
             break;
 
         case AppState::REQUEST_HISTORY:
+            isBlinking = true;
             requestHistoryForAllUsers();
             currentState = AppState::COLLECTING;
             stateTimer = millis();
@@ -605,6 +657,8 @@ void loop() {
             if (!pClient || !pClient->isConnected()) {
                  Serial.println("Lost connection during collecting!");
                  cleanupBleSession();
+                 isBlinking = false;
+                 setLed(false);
                  currentState = AppState::SCANNING;
                  break;
             }
@@ -612,6 +666,8 @@ void loop() {
                 if (latestMeasurement.time == lastPublishedMeasurement.time) {
                     Serial.println("No new measurements received, restarting scan in 40 seconds...");
                     cleanupBleSession();
+                    isBlinking = false;
+                    setLed(false);
                     currentState = AppState::WAITING;
                     break;
                 }
@@ -651,6 +707,8 @@ void loop() {
                 }
 
                 Serial.println("Waiting 40 seconds before restarting...");
+                isBlinking = false;
+                setLed(false);
                 currentState = AppState::WAITING;
                 stateTimer = millis();
             }
