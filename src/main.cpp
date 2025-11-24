@@ -128,6 +128,23 @@ Measurement lastPublishedMeasurement;
 void setLed(bool on) {
     digitalWrite(BLUE_LED_PIN, on ? LOW : HIGH);
 }
+
+
+
+bool isBlinking = false;
+unsigned long blinkLastToggle = 0;
+bool ledState = false;
+
+void updateLed() {
+    if (isBlinking) {
+        if (millis() - blinkLastToggle > 200) {
+            blinkLastToggle = millis();
+            ledState = !ledState;
+            setLed(ledState);
+        }
+    }
+}
+
 // Calculations based on OpenScale implementation
 // https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
 float calculateFat(const User& user, float weight, float imp50) {
@@ -269,13 +286,11 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     }
 };
 
-static ClientCallbacks clientCallbacks;
-
 bool connectToScaleDevice() {
     Serial.printf("Connecting to %s\n", scaleDevice->getAddress().toString().c_str());
 
     pClient = NimBLEDevice::createClient();
-    pClient->setClientCallbacks(&clientCallbacks);
+    pClient->setClientCallbacks(new ClientCallbacks());
 
     if (!pClient->connect(scaleDevice)) {
         Serial.println("Failed to connect");
@@ -374,8 +389,6 @@ class BLEScanCallbacks: public NimBLEScanCallbacks {
     }
 };
 
-static BLEScanCallbacks scanCallbacks;
-
 void connectToMqtt() {
     uint connectAttempts = 0;
     while (!mqttClient.connected()) {
@@ -432,7 +445,7 @@ void disconnectFromWifi() {
 
 void startScan() {
     NimBLEScan* pBLEScan = NimBLEDevice::getScan();
-    pBLEScan->setScanCallbacks(&scanCallbacks);
+    pBLEScan->setScanCallbacks(new BLEScanCallbacks());
     if(pBLEScan->start(0, false)) {
         Serial.println("BLE scan started successfully, wating for scale device...");
         setLed(true);
@@ -472,6 +485,7 @@ String buildCurrentTimeString() {
 
 void syncTime() {
     connectToWifi();
+    delay(100);
 
     // Sync time via NTP
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
@@ -554,6 +568,7 @@ void setup() {
 
 void loop() {
     checkRestart();
+    updateLed();
 
     switch (currentState) {
         case AppState::SCANNING:
@@ -596,6 +611,7 @@ void loop() {
             break;
 
         case AppState::REQUEST_HISTORY:
+            isBlinking = true;
             requestHistoryForAllUsers();
             currentState = AppState::COLLECTING;
             stateTimer = millis();
@@ -605,6 +621,8 @@ void loop() {
             if (!pClient || !pClient->isConnected()) {
                  Serial.println("Lost connection during collecting!");
                  cleanupBleSession();
+                 isBlinking = false;
+                 setLed(false);
                  currentState = AppState::SCANNING;
                  break;
             }
@@ -612,6 +630,8 @@ void loop() {
                 if (latestMeasurement.time == lastPublishedMeasurement.time) {
                     Serial.println("No new measurements received, restarting scan in 40 seconds...");
                     cleanupBleSession();
+                    isBlinking = false;
+                    setLed(false);
                     currentState = AppState::WAITING;
                     break;
                 }
@@ -651,6 +671,8 @@ void loop() {
                 }
 
                 Serial.println("Waiting 40 seconds before restarting...");
+                isBlinking = false;
+                setLed(false);
                 currentState = AppState::WAITING;
                 stateTimer = millis();
             }
