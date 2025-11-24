@@ -1,7 +1,5 @@
 #include <Arduino.h>
-#include <map>
 #include <time.h>
-#include <vector>
 #include <WiFi.h>
 
 #include <ArduinoJson.h>
@@ -10,38 +8,9 @@
 #include <PubSubClient.h>
 
 #include "config.h"
+#include "measurement_utils.h"
 
 constexpr auto BLUE_LED_PIN = 8;
-
-struct User {
-    int age;
-    float height;
-    bool isMale;
-    int activityLevel;
-};
-
-struct Measurement {
-    String user;
-    String time;
-    uint8_t pID = 0;
-    float weight = 0.0;
-    float fat = 0.0;
-    float water = 0.0;
-    float muscle = 0.0;
-};
-
-struct MeasurementFrame {
-    uint8_t pID;
-    uint16_t year;
-    uint8_t month;
-    uint8_t day;
-    uint8_t hour;
-    uint8_t minute;
-    uint8_t second;
-    float weightKg;
-    uint16_t imp5;
-    uint16_t imp50;
-};
 
 constexpr auto REQUEST_DELAY_MS = 15000; // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 5000; // time to wait to collect measurements from notifications
@@ -50,8 +19,6 @@ constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next s
 constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
 
 constexpr size_t MQTT_BUFFER_SIZE = 1024;
-
-constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
 
 const char* SCALE_DEVICE_NAME = "Shape100";
 
@@ -68,25 +35,6 @@ Measurement latestMeasurement;
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-
-std::map<String, User> users = {
-    // name, age, height, is_male, activity_level (1-5)
-    {"mona", {50, 159.0, false, 2}},
-    {"tulpe", {55, 180.0, true, 2}}
-};
-
-struct UserDetectionRule {
-    String name;
-    float minWeightKg;
-    float maxWeightKg;
-};
-
-std::vector<UserDetectionRule> detectionRules = {
-    {"mona", 45.0f, 74.9f},
-    {"tulpe", 75.0f, 89.0f}
-};
-
-uint8_t userCount = static_cast<uint8_t>(detectionRules.size());
 
 enum class AppState {
     SCANNING,
@@ -117,8 +65,6 @@ static NimBLEUUID SVC_SOEHNLE("352e3000-28e9-40b8-a361-6db4cca4147c");
 static NimBLEUUID CHR_SOEHNLE_A("352e3001-28e9-40b8-a361-6db4cca4147c"); // Measurements
 static NimBLEUUID CHR_SOEHNLE_CMD("352e3002-28e9-40b8-a361-6db4cca4147c"); // Commands
 
-constexpr auto MEASUREMENT_OPCODE = 0x09;
-
 NimBLEAdvertisedDevice* scaleDevice = nullptr;
 
 uint8_t batteryLevel = 0;
@@ -145,80 +91,12 @@ void updateLed() {
     }
 }
 
-// Calculations based on OpenScale implementation
-// https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
-float calculateFat(const User& user, float weight, float imp50) {
-    float activityCorrFac = 0.0;
-    if (user.activityLevel == 4) activityCorrFac = user.isMale ? 2.5 : 2.3;
-    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 4.3 : 4.1;
-
-    float sexCorrFac = user.isMale ? 0.250 : 0.214;
-    float activitySexDiv = user.isMale ? 65.5 : 55.1;
-
-    return (1.847 * weight * 10000.0 / (user.height * user.height) + 
-            sexCorrFac * user.age + 0.062 * imp50 - 
-            (activitySexDiv - activityCorrFac));
-}
-
-float calculateWater(const User& user, float weight, float imp50) {
-    float activityCorrFac = 0.0;
-    if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 2.83 : 0.0;
-    else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 3.93 : 0.4;
-    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.33 : 1.4;
-
-    return ((0.3674 * user.height * user.height / imp50 + 
-            0.17530 * weight - 0.11 * user.age + 
-            (6.53 + activityCorrFac)) / weight * 100.0);
-}
-
-float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
-    float activityCorrFac = 0.0;
-    if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 3.6224 : 0.0;
-    else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 4.3904 : 0.0;
-    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.4144 : 1.664;
-
-    return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height + 
-            0.13796 * weight - 0.1152 * user.age + 
-            (5.12 + activityCorrFac)) / weight * 100.0);
-}
-
 void logHexPayload(const uint8_t* data, size_t length) {
     Serial.print("Received measurement data: ");
     for (size_t i = 0; i < length; i++) {
         Serial.printf("%02x", data[i]);
     }
     Serial.println();
-}
-
-bool parseMeasurementFrame(const uint8_t* data, size_t length, MeasurementFrame& frame) {
-    if (length != MEASUREMENT_FRAME_LENGTH || data[0] != MEASUREMENT_OPCODE) {
-        return false;
-    }
-
-    frame.pID = data[1];
-    frame.year = (data[2] << 8) | data[3];
-    frame.month = data[4];
-    frame.day = data[5];
-    frame.hour = data[6];
-    frame.minute = data[7];
-    frame.second = data[8];
-    frame.weightKg = static_cast<float>((data[9] << 8) | data[10]) / 10.0f;
-    frame.imp5 = (data[11] << 8) | data[12];
-    frame.imp50 = (data[13] << 8) | data[14];
-    return true;
-}
-
-const User* resolveUserByWeight(float weightKg, String& userName) {
-    for (const auto& rule : detectionRules) {
-        if (weightKg >= rule.minWeightKg && weightKg <= rule.maxWeightKg) {
-            auto it = users.find(rule.name);
-            if (it != users.end()) {
-                userName = rule.name;
-                return &it->second;
-            }
-        }
-    }
-    return nullptr;
 }
 
 // this function get's called for each measurement notification
@@ -286,11 +164,14 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     }
 };
 
+static ClientCallbacks clientCallbacks;
+
 bool connectToScaleDevice() {
     Serial.printf("Connecting to %s\n", scaleDevice->getAddress().toString().c_str());
 
     pClient = NimBLEDevice::createClient();
     pClient->setClientCallbacks(new ClientCallbacks());
+    // pClient->setClientCallbacks(&clientCallbacks); // this leads to a crash
 
     if (!pClient->connect(scaleDevice)) {
         Serial.println("Failed to connect");
@@ -389,6 +270,8 @@ class BLEScanCallbacks: public NimBLEScanCallbacks {
     }
 };
 
+static BLEScanCallbacks scanCallbacks;
+
 void connectToMqtt() {
     uint connectAttempts = 0;
     while (!mqttClient.connected()) {
@@ -445,7 +328,8 @@ void disconnectFromWifi() {
 
 void startScan() {
     NimBLEScan* pBLEScan = NimBLEDevice::getScan();
-    pBLEScan->setScanCallbacks(new BLEScanCallbacks());
+    // pBLEScan->setScanCallbacks(new BLEScanCallbacks());
+    pBLEScan->setScanCallbacks(&scanCallbacks);
     if(pBLEScan->start(0, false)) {
         Serial.println("BLE scan started successfully, wating for scale device...");
         setLed(true);

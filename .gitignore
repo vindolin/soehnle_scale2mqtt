@@ -6,3 +6,4 @@
 techlog.txt
 src/measurements.json
 .gitignore
+tmp/scale.py
