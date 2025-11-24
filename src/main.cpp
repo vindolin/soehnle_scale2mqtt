@@ -164,7 +164,7 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     }
 };
 
-static ClientCallbacks clientCallbacks;
+// static ClientCallbacks clientCallbacks;
 
 bool connectToScaleDevice() {
     Serial.printf("Connecting to %s\n", scaleDevice->getAddress().toString().c_str());
