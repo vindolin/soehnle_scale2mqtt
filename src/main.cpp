@@ -30,6 +30,7 @@ const char* BATTERY_LEVEL_TOPIC = "smartscale/battery";
 
 const char* MEASUREMENT_TOPIC = "smartscale/measurement";
 const char* MEASUREMENT_TIME_TOPIC = "smartscale/measurementTime";
+const char* MEASUREMENT_COUNT_TOPIC = "smartscale/measurementCount";
 
 Measurement latestMeasurement;
 
@@ -75,7 +76,7 @@ void setLed(bool on) {
     digitalWrite(BLUE_LED_PIN, on ? LOW : HIGH);
 }
 
-
+uint16_t measurementCount = 0;
 
 bool isBlinking = false;
 unsigned long blinkLastToggle = 0;
@@ -102,6 +103,8 @@ void logHexPayload(const uint8_t* data, size_t length) {
 // this function get's called for each measurement notification
 void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
     // logHexPayload(pData, length);
+
+    measurementCount++;
 
     MeasurementFrame frame;
     if (!parseMeasurementFrame(pData, length, frame)) {
@@ -331,7 +334,7 @@ void startScan() {
     // pBLEScan->setScanCallbacks(new BLEScanCallbacks());
     pBLEScan->setScanCallbacks(&scanCallbacks);
     if(pBLEScan->start(0, false)) {
-        Serial.println("BLE scan started successfully, wating for scale device...");
+        Serial.println("BLE scan started successfully, waiting for scale device...");
         setLed(true);
     } else {
         Serial.println("Failed to start scan");
@@ -340,6 +343,7 @@ void startScan() {
 }
 
 void requestHistoryForAllUsers() {
+    measurementCount = 0;
     if (pClient == nullptr) return;
 
     NimBLERemoteService* pSvcSoehnle = pClient->getService(SVC_SOEHNLE);
@@ -519,6 +523,7 @@ void loop() {
                     currentState = AppState::WAITING;
                     break;
                 }
+                Serial.println("Measurement collection complete, [" + String(measurementCount) + "]");
                 lastPublishedMeasurement = latestMeasurement;
                 currentState = AppState::PUBLISHING;
             }
@@ -541,6 +546,7 @@ void loop() {
                         Serial.println("Failed to publish data");
                     }
                     mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str());
+                    mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str());
 
                     const String timeString = buildCurrentTimeString();
                     mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str());

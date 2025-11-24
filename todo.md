@@ -1,0 +1,3 @@
+- is there a way to query only the last measurement?
+- how many measurements can the history hold?
+- adjust collect timer?
