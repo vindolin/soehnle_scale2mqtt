@@ -4,20 +4,20 @@
 #include <vector>
 #include <WiFi.h>
 
-#include "config.h"
-
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 #include <NimBLEScan.h>
 #include <PubSubClient.h>
+
+#include "config.h"
 
 constexpr auto BLUE_LED_PIN = 8;
 
 struct User {
     int age;
     float height;
-    bool is_male;
-    int activity_level;
+    bool isMale;
+    int activityLevel;
 };
 
 struct Measurement {
@@ -45,9 +45,10 @@ struct MeasurementFrame {
 
 constexpr auto REQUEST_DELAY_MS = 15000; // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 5000; // time to wait to collect measurements from notifications
-constexpr auto LONG_RESTART_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
-// constexpr int SERIAL_STARTUP_DELAY = 4000; // time to wait for Serial to initialize
-constexpr auto SERIAL_STARTUP_DELAY = 1000; // time to wait for Serial to initialize
+constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
+// constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to initialize
+constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
+
 constexpr size_t MQTT_BUFFER_SIZE = 1024;
 
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
@@ -127,41 +128,41 @@ Measurement lastPublishedMeasurement;
 void setLed(bool on) {
     digitalWrite(BLUE_LED_PIN, on ? LOW : HIGH);
 }
-
+// Calculations based on OpenScale implementation
 // https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
-float get_fat(const User& user, float weight, float imp50) {
-    float activity_corr_fac = 0.0;
-    if (user.activity_level == 4) activity_corr_fac = user.is_male ? 2.5 : 2.3;
-    else if (user.activity_level == 5) activity_corr_fac = user.is_male ? 4.3 : 4.1;
+float calculateFat(const User& user, float weight, float imp50) {
+    float activityCorrFac = 0.0;
+    if (user.activityLevel == 4) activityCorrFac = user.isMale ? 2.5 : 2.3;
+    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 4.3 : 4.1;
 
-    float sex_corr_fac = user.is_male ? 0.250 : 0.214;
-    float activity_sex_div = user.is_male ? 65.5 : 55.1;
+    float sexCorrFac = user.isMale ? 0.250 : 0.214;
+    float activitySexDiv = user.isMale ? 65.5 : 55.1;
 
     return (1.847 * weight * 10000.0 / (user.height * user.height) + 
-            sex_corr_fac * user.age + 0.062 * imp50 - 
-            (activity_sex_div - activity_corr_fac));
+            sexCorrFac * user.age + 0.062 * imp50 - 
+            (activitySexDiv - activityCorrFac));
 }
 
-float get_water(const User& user, float weight, float imp50) {
-    float activity_corr_fac = 0.0;
-    if (user.activity_level >= 1 && user.activity_level <= 3) activity_corr_fac = user.is_male ? 2.83 : 0.0;
-    else if (user.activity_level == 4) activity_corr_fac = user.is_male ? 3.93 : 0.4;
-    else if (user.activity_level == 5) activity_corr_fac = user.is_male ? 5.33 : 1.4;
+float calculateWater(const User& user, float weight, float imp50) {
+    float activityCorrFac = 0.0;
+    if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 2.83 : 0.0;
+    else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 3.93 : 0.4;
+    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.33 : 1.4;
 
     return ((0.3674 * user.height * user.height / imp50 + 
             0.17530 * weight - 0.11 * user.age + 
-            (6.53 + activity_corr_fac)) / weight * 100.0);
+            (6.53 + activityCorrFac)) / weight * 100.0);
 }
 
-float get_muscle(const User& user, float weight, float imp50, float imp5) {
-    float activity_corr_fac = 0.0;
-    if (user.activity_level >= 1 && user.activity_level <= 3) activity_corr_fac = user.is_male ? 3.6224 : 0.0;
-    else if (user.activity_level == 4) activity_corr_fac = user.is_male ? 4.3904 : 0.0;
-    else if (user.activity_level == 5) activity_corr_fac = user.is_male ? 5.4144 : 1.664;
+float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
+    float activityCorrFac = 0.0;
+    if (user.activityLevel >= 1 && user.activityLevel <= 3) activityCorrFac = user.isMale ? 3.6224 : 0.0;
+    else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 4.3904 : 0.0;
+    else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.4144 : 1.664;
 
     return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height + 
             0.13796 * weight - 0.1152 * user.age + 
-            (5.12 + activity_corr_fac)) / weight * 100.0);
+            (5.12 + activityCorrFac)) / weight * 100.0);
 }
 
 void logHexPayload(const uint8_t* data, size_t length) {
@@ -224,9 +225,9 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     auto water = 0.0;
     auto muscle = 0.0;
     if(frame.imp50 > 0) {
-        fat = get_fat(*user, frame.weightKg, frame.imp50);
-        water = get_water(*user, frame.weightKg, frame.imp50);
-        muscle = get_muscle(*user, frame.weightKg, frame.imp50, frame.imp5);
+        fat = calculateFat(*user, frame.weightKg, frame.imp50);
+        water = calculateWater(*user, frame.weightKg, frame.imp50);
+        muscle = calculateMuscle(*user, frame.weightKg, frame.imp50, frame.imp5);
     }
 
     char timeStr[25];
@@ -268,11 +269,13 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     }
 };
 
+static ClientCallbacks clientCallbacks;
+
 bool connectToScaleDevice() {
     Serial.printf("Connecting to %s\n", scaleDevice->getAddress().toString().c_str());
 
     pClient = NimBLEDevice::createClient();
-    pClient->setClientCallbacks(new ClientCallbacks());
+    pClient->setClientCallbacks(&clientCallbacks);
 
     if (!pClient->connect(scaleDevice)) {
         Serial.println("Failed to connect");
@@ -371,6 +374,8 @@ class BLEScanCallbacks: public NimBLEScanCallbacks {
     }
 };
 
+static BLEScanCallbacks scanCallbacks;
+
 void connectToMqtt() {
     uint connectAttempts = 0;
     while (!mqttClient.connected()) {
@@ -427,7 +432,7 @@ void disconnectFromWifi() {
 
 void startScan() {
     NimBLEScan* pBLEScan = NimBLEDevice::getScan();
-    pBLEScan->setScanCallbacks(new BLEScanCallbacks());
+    pBLEScan->setScanCallbacks(&scanCallbacks);
     if(pBLEScan->start(0, false)) {
         Serial.println("BLE scan started successfully, wating for scale device...");
         setLed(true);
@@ -534,12 +539,10 @@ void cleanupBleSession() {
 
 void setup() {
     Serial.begin(115200);
-    delay(SERIAL_STARTUP_DELAY);  // Wait for CDC Serial to initialize
+    delay(SERIAL_STARTUP_DELAY_MS);  // Wait for CDC Serial to initialize
 
     pinMode(BLUE_LED_PIN, OUTPUT);
     setLed(false);
-
-    // setLed(false);
     
     mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
     mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
@@ -654,7 +657,7 @@ void loop() {
             break;
 
         case AppState::WAITING:
-            if (millis() - stateTimer > LONG_RESTART_DELAY_MS) {
+            if (millis() - stateTimer > BT_DISCONNECT_DELAY_MS) {
                 currentState = AppState::SCANNING;
             }
             break;
