@@ -21,6 +21,7 @@ struct User {
 struct Measurement {
     String user;
     String time;
+    uint8_t userIndex;
     float weight;
     float fat;
     float water;
@@ -28,6 +29,7 @@ struct Measurement {
 };
 
 struct MeasurementFrame {
+    uint8_t pID;
     uint16_t year;
     uint8_t month;
     uint8_t day;
@@ -39,13 +41,11 @@ struct MeasurementFrame {
     uint16_t imp50;
 };
 
-std::vector<Measurement> collectedMeasurements;
-
 constexpr int requestDelayMs = 5000; // time to wait before requesting history
 constexpr int collectDelayMs = 5000; // time to wait to collect measurements from notifications
 constexpr int restartDelayMs = 45000; // time to wait before the next scan
 // constexpr int serialStartupDelay = 4000; // time to wait for Serial to initialize
-constexpr int serialStartupDelay = 5000; // time to wait for Serial to initialize
+constexpr int serialStartupDelay = 1000; // time to wait for Serial to initialize
 
 constexpr size_t mqttBufferSize = 1024;
 constexpr size_t measurementFrameLength = 15;
@@ -63,6 +63,8 @@ const char* batteryLevelTopic = "smartscale/battery";
 
 const char* dataTopic = "smartscale/measurement";
 const char* dataTimeTopic = "smartscale/measurementTime";
+
+Measurement latestMeasurement;
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -160,6 +162,7 @@ bool parseMeasurementFrame(const uint8_t* data, size_t length, MeasurementFrame&
         return false;
     }
 
+    frame.pID = data[1];
     frame.year = (data[2] << 8) | data[3];
     frame.month = data[4];
     frame.day = data[5];
@@ -215,13 +218,21 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     snprintf(timeStr, sizeof(timeStr), "%04d-%02d-%02dT%02d:%02d:%02dZ", frame.year, frame.month, frame.day, frame.hour, frame.minute, frame.second);
 
     Measurement m;
+
+    m.userIndex = frame.pID;
     m.user = userName;
-    m.time = String(timeStr);
+    m.time = timeStr;
     m.weight = frame.weightKg;
     m.fat = fat;
     m.water = water;
     m.muscle = muscle;
-    collectedMeasurements.push_back(m);
+
+    Serial.printf("%5s (%d) at %s: weight=%.1f kg, fat=%.1f %%, water=%.1f %%, muscle=%.1f %%\n",
+                  m.user.c_str(), m.userIndex, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
+
+    if(latestMeasurement.time.isEmpty() || m.time > latestMeasurement.time) {
+        latestMeasurement = m;
+    }
 }
 
 void notifyBattery(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
@@ -479,27 +490,21 @@ void checkRestart() {
     }
 }
 
-bool buildLatestMeasurementJson(String& outJson) {
-    DynamicJsonDocument doc(1024);
-
-    if (!collectedMeasurements.empty()) {
-        const auto latestIt = std::max_element(
-            collectedMeasurements.begin(),
-            collectedMeasurements.end(),
-            [](const Measurement& lhs, const Measurement& rhs) {
-                return lhs.time < rhs.time;
-            });
-
-        doc["user"] = latestIt->user;
-        doc["time"] = latestIt->time;
-        doc["weight"] = latestIt->weight;
-        doc["fat"] = latestIt->fat;
-        doc["water"] = latestIt->water;
-        doc["muscle"] = latestIt->muscle;
+bool generateMeasurementJson(String& outJson) {
+    if (latestMeasurement.time.isEmpty()) {
+        return false;
     }
+    DynamicJsonDocument doc(512);
 
+    doc["userIndex"] = latestMeasurement.userIndex;
+    doc["user"] = latestMeasurement.user;
+    doc["time"] = latestMeasurement.time;
+    doc["weight"] = latestMeasurement.weight;
+    doc["fat"] = latestMeasurement.fat;
+    doc["water"] = latestMeasurement.water;
+    doc["muscle"] = latestMeasurement.muscle;
     serializeJson(doc, outJson);
-    return !collectedMeasurements.empty();
+    return true;
 }
 
 void cleanupBleSession() {
@@ -514,7 +519,6 @@ void cleanupBleSession() {
         delete scaleDevice;
         scaleDevice = nullptr;
     }
-    collectedMeasurements.clear();
     scaleConnected = false;
     historyRequested = false;
 
@@ -545,13 +549,12 @@ void loop() {
 
         if (millis() - connectionTime > requestDelayMs + collectDelayMs) {
             String jsonString;
-            const bool hasMeasurement = buildLatestMeasurementJson(jsonString);
-            Serial.println(jsonString);
+            if (generateMeasurementJson(jsonString)) {
+                Serial.println(jsonString);
 
-            Serial.println("Data collection finished. Disconnecting BLE...");
-            cleanupBleSession();
+                Serial.println("Data collection finished. Disconnecting BLE...");
+                cleanupBleSession();
 
-            if (hasMeasurement) {
                 connectToWifi();
                 connectToMqtt();
                 if (mqttClient.publish(dataTopic, jsonString.c_str())) {
