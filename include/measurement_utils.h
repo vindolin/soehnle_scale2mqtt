@@ -3,6 +3,7 @@
 #include <vector>
 
 struct User {
+    String name;
     int age;
     float height;
     bool isMale;
@@ -39,7 +40,7 @@ struct UserDetectionRule {
 };
 
 // Global configuration for users and rules
-extern std::map<String, User> users;
+extern std::map<String, User> Users;
 extern std::vector<UserDetectionRule> detectionRules;
 
 constexpr auto MEASUREMENT_OPCODE = 0x09;
@@ -81,19 +82,6 @@ float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
     return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height + 
             0.13796 * weight - 0.1152 * user.age + 
             (5.12 + activityCorrFac)) / weight * 100.0);
-}
-
-const User* resolveUserByWeight(float weightKg, String& userName) {
-    for (const auto& rule : detectionRules) {
-        if (weightKg >= rule.minWeightKg && weightKg <= rule.maxWeightKg) {
-            auto it = users.find(rule.name);
-            if (it != users.end()) {
-                userName = rule.name;
-                return &it->second;
-            }
-        }
-    }
-    return nullptr;
 }
 
 bool parseMeasurementFrame(const uint8_t* data, size_t length, MeasurementFrame& frame) {

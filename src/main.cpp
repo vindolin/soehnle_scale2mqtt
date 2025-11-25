@@ -113,21 +113,20 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
         Serial.println("Skipping invalid measurement frame");
         return;
     }
-
-    String userName;
-    const User* user = resolveUserByWeight(frame.weightKg, userName);
-    if (user == nullptr) {
-        Serial.println("Unknown user based on weight");
+    if (users.find(frame.pID) == users.end()) {
+        Serial.printf("Unknown user pID: %d\n", frame.pID);
         return;
     }
+    const User& user = users[frame.pID];
+    String userName = user.name;
 
     auto fat = 0.0;
     auto water = 0.0;
     auto muscle = 0.0;
     if(frame.imp50 > 0) {
-        fat = calculateFat(*user, frame.weightKg, frame.imp50);
-        water = calculateWater(*user, frame.weightKg, frame.imp50);
-        muscle = calculateMuscle(*user, frame.weightKg, frame.imp50, frame.imp5);
+        fat = calculateFat(user, frame.weightKg, frame.imp50);
+        water = calculateWater(user, frame.weightKg, frame.imp50);
+        muscle = calculateMuscle(user, frame.weightKg, frame.imp50, frame.imp5);
     }
 
     char timeStr[25];
