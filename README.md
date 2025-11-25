@@ -1,6 +1,6 @@
 ## Soehnle Shape Sense Control 100 --BLE--> ESP32c3 --WIFI--> MQTT
 
-I bought a Soehnle Shape Sense Control 100 smart scale and wanted to get the data from the scale, so I can plot the values with Grafana.
+I bought a Soehnle Shape Sense Control 100 smart scale and wanted to get the data directly from the scale for plotting the values with Grafana.
 
 Luckily found the GATT descriptors on the OpenScale project at: https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
 
