@@ -3,7 +3,6 @@
 #include <vector>
 
 struct User {
-    String name;
     int age;
     float height;
     bool isMale;
@@ -11,7 +10,6 @@ struct User {
 };
 
 struct Measurement {
-    String user;
     String time;
     uint8_t pID = 0;
     float weight = 0.0;

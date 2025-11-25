@@ -118,7 +118,6 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
         return;
     }
     const User& user = users[frame.pID];
-    String userName = user.name;
 
     auto fat = 0.0;
     auto water = 0.0;
@@ -135,15 +134,14 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     Measurement m;
 
     m.pID = frame.pID;
-    m.user = userName;
     m.time = timeStr;
     m.weight = frame.weightKg;
     m.fat = fat;
     m.water = water;
     m.muscle = muscle;
 
-    Serial.printf("%5s (%d) at %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n",
-                  m.user.c_str(), m.pID, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
+    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n",
+                  m.pID, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
 
     // we keep only the latest measurement from the notifications
     if(latestMeasurement.time.isEmpty() || m.time > latestMeasurement.time) {
@@ -412,8 +410,7 @@ bool generateMeasurementJson(String& outJson) {
     }
     DynamicJsonDocument doc(512);
 
-    doc["userIndex"] = latestMeasurement.pID;
-    doc["user"] = latestMeasurement.user;
+    doc["p_id"] = latestMeasurement.pID;
     doc["time"] = latestMeasurement.time;
     doc["weight"] = latestMeasurement.weight;
     doc["fat"] = latestMeasurement.fat;

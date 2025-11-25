@@ -14,7 +14,6 @@ Luckily found the GATT descriptors on the OpenScale project at: https://github.c
 - then the module requests the measurement history from the scale (asynchron)
 - it gives the scale 5 seconds (COLLECT_DELAY_MS) to send the history values
 - the value with the highest time is selected and published to scale/measurement
-- the user is determined by checking the weight limits in users.h
 - additional the measure time + battery level is published
 - the module then waits 40 (BT_DISCONNECT_DELAY) seconds (the time it takes for the scale to disable bluetooth) before going back to scan mode
 - rinse/repeat
