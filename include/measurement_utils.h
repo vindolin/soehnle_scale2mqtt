@@ -44,19 +44,6 @@ extern std::vector<UserDetectionRule> detectionRules;
 
 constexpr auto MEASUREMENT_OPCODE = 0x09;
 
-std::map<String, User> users = {
-    // name, age, height, is_male, activity_level (1-5)
-    {"mona", {50, 159.0, false, 2}},
-    {"tulpe", {55, 180.0, true, 2}}
-};
-
-std::vector<UserDetectionRule> detectionRules = {
-    {"mona", 45.0f, 74.9f},
-    {"tulpe", 75.0f, 89.0f}
-};
-
-uint8_t userCount = static_cast<uint8_t>(detectionRules.size());
-
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
 
 // Calculations based on OpenScale implementation

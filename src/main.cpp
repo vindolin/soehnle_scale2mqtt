@@ -8,6 +8,7 @@
 #include <PubSubClient.h>
 
 #include "config.h"
+#include "users.h"
 #include "measurement_utils.h"
 
 constexpr auto BLUE_LED_PIN = 8;
@@ -19,8 +20,6 @@ constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next s
 constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
 
 constexpr size_t MQTT_BUFFER_SIZE = 1024;
-
-const char* SCALE_DEVICE_NAME = "Shape100";
 
 const auto GMT_OFFSET_SEC = 3600;
 const auto DAYLIGHT_OFFSET_SEC = 3600;
@@ -52,6 +51,8 @@ unsigned long stateTimer = 0;
 
 NimBLEClient* pClient = nullptr;
 
+const char* SCALE_DEVICE_NAME = "Shape100";
+
 // --- UUIDs ---
 static NimBLEUUID SVC_BATTERY("180f");
 static NimBLEUUID CHR_BATTERY_LEVEL("2a19");
@@ -64,6 +65,7 @@ static NimBLEUUID CHR_USER_CONTROL_POINT("2a9f");
 
 static NimBLEUUID SVC_SOEHNLE("352e3000-28e9-40b8-a361-6db4cca4147c");
 static NimBLEUUID CHR_SOEHNLE_A("352e3001-28e9-40b8-a361-6db4cca4147c"); // Measurements
+// static NimBLEUUID CHR_SOEHNLE_B("352e3004-28e9-40b8-a361-6db4cca4147c"); // ??? always returns 0x01 🤷‍♂️
 static NimBLEUUID CHR_SOEHNLE_CMD("352e3002-28e9-40b8-a361-6db4cca4147c"); // Commands
 
 NimBLEAdvertisedDevice* scaleDevice = nullptr;
@@ -141,7 +143,7 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     m.water = water;
     m.muscle = muscle;
 
-    Serial.printf("%5s (%d) at %s: weight=%.1f kg, fat=%.1f %%, water=%.1f %%, muscle=%.1f %%\n",
+    Serial.printf("%5s (%d) at %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n",
                   m.user.c_str(), m.pID, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
 
     // we keep only the latest measurement from the notifications
