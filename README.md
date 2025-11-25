@@ -1,8 +1,12 @@
-## Soehnle Shape Sense Control 100 to MQTT Gateway
+## Soehnle Shape Sense Control 100 --BLE--> ESP32c3 --WIFI--> MQTT
 
 I bought a Soehnle Shape Sense Control 100 smart scale and wanted to get the data from the scale, so I can plot the values with Grafana.
 
 Luckily found the GATT descriptors on the OpenScale project at: https://github.com/oliexdev/openScale/blob/master/android_app/app/src/main/java/com/health/openscale/core/bluetooth/scales/SoehnleHandler.kt
+
+I converted the relevant code to Arduino and run it on an ESP32c3
+
+The ESP wait's for the scale to announce itself, reads the last measurement and sends it over WIFI to an MQTT server.
 
 ## Workflow:
 
