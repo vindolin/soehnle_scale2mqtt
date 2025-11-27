@@ -1,0 +1,57 @@
+Found device 00:A0:50:5E:B9:64: Shape100 (out of 1)
+SERVICE 00001801-0000-1000-8000-00805f9b34fb (Handle: 8): Generic Attribute Profile
+     CHARACTERISTIC 00002a05-0000-1000-8000-00805f9b34fb (Handle: 9): Service Changed ['indicate']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 11): Client Characteristic Configuration
+SERVICE 0000181b-0000-1000-8000-00805f9b34fb (Handle: 46): Body Composition
+     CHARACTERISTIC 00002a9c-0000-1000-8000-00805f9b34fb (Handle: 49): Body Composition Measurement ['indicate']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 51): Client Characteristic Configuration
+     CHARACTERISTIC 00002a9b-0000-1000-8000-00805f9b34fb (Handle: 47): Body Composition Feature ['read']
+SERVICE 0000ffb0-0000-1000-8000-00805f9b34fb (Handle: 84): Vendor specific
+     CHARACTERISTIC 0000ffb1-0000-1000-8000-00805f9b34fb (Handle: 85): Vendor specific ['write', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 87): Client Characteristic Configuration
+SERVICE 0000180f-0000-1000-8000-00805f9b34fb (Handle: 52): Battery Service
+     CHARACTERISTIC 00002a19-0000-1000-8000-00805f9b34fb (Handle: 53): Battery Level ['read', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 56): Client Characteristic Configuration
+         DESCRIPTOR 00002904-0000-1000-8000-00805f9b34fb (Handle: 55): Characteristic Presentation Format
+SERVICE 0000180a-0000-1000-8000-00805f9b34fb (Handle: 18): Device Information
+     CHARACTERISTIC 00002a28-0000-1000-8000-00805f9b34fb (Handle: 25): Software Revision String ['read']
+     CHARACTERISTIC 00002a29-0000-1000-8000-00805f9b34fb (Handle: 19): Manufacturer Name String ['read']
+     CHARACTERISTIC 00002a27-0000-1000-8000-00805f9b34fb (Handle: 23): Hardware Revision String ['read']
+     CHARACTERISTIC 00002a25-0000-1000-8000-00805f9b34fb (Handle: 27): Serial Number String ['read']
+     CHARACTERISTIC 00002a24-0000-1000-8000-00805f9b34fb (Handle: 21): Model Number String ['read']
+SERVICE 00001800-0000-1000-8000-00805f9b34fb (Handle: 1): Generic Access Profile
+     CHARACTERISTIC 00002a01-0000-1000-8000-00805f9b34fb (Handle: 4): Appearance ['read']
+     CHARACTERISTIC 00002a00-0000-1000-8000-00805f9b34fb (Handle: 2): Device Name ['read', 'write']
+     CHARACTERISTIC 00002a04-0000-1000-8000-00805f9b34fb (Handle: 6): Peripheral Preferred Connection Parameters ['read']
+SERVICE 0000181d-0000-1000-8000-00805f9b34fb (Handle: 12): Weight Scale
+     CHARACTERISTIC 00002a9d-0000-1000-8000-00805f9b34fb (Handle: 15): Weight Measurement ['indicate']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 17): Client Characteristic Configuration
+     CHARACTERISTIC 00002a9e-0000-1000-8000-00805f9b34fb (Handle: 13): Weight Scale Feature ['read']
+SERVICE 00001805-0000-1000-8000-00805f9b34fb (Handle: 57): Current Time Service
+     CHARACTERISTIC 00002a14-0000-1000-8000-00805f9b34fb (Handle: 63): Reference Time Information ['read']
+     CHARACTERISTIC 00002a2b-0000-1000-8000-00805f9b34fb (Handle: 58): Current Time ['read', 'write', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 60): Client Characteristic Configuration
+     CHARACTERISTIC 00002a0f-0000-1000-8000-00805f9b34fb (Handle: 61): Local Time Information ['read', 'write']
+SERVICE 352e3000-28e9-40b8-a361-6db4cca4147c (Handle: 65): Unknown
+     CHARACTERISTIC 352e3003-28e9-40b8-a361-6db4cca4147c (Handle: 72): Unknown ['write']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 74): Client Characteristic Configuration
+     CHARACTERISTIC 352e3004-28e9-40b8-a361-6db4cca4147c (Handle: 75): Unknown ['read', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 77): Client Characteristic Configuration
+     CHARACTERISTIC 352e3002-28e9-40b8-a361-6db4cca4147c (Handle: 69): Unknown ['write']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 71): Client Characteristic Configuration
+     CHARACTERISTIC 352e3006-28e9-40b8-a361-6db4cca4147c (Handle: 81): Unknown ['write']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 83): Client Characteristic Configuration
+     CHARACTERISTIC 352e3005-28e9-40b8-a361-6db4cca4147c (Handle: 78): Unknown ['read', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 80): Client Characteristic Configuration
+     CHARACTERISTIC 352e3001-28e9-40b8-a361-6db4cca4147c (Handle: 66): Unknown ['read', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 68): Client Characteristic Configuration
+SERVICE 0000181c-0000-1000-8000-00805f9b34fb (Handle: 29): User Data
+     CHARACTERISTIC 00002a8c-0000-1000-8000-00805f9b34fb (Handle: 32): Gender ['read', 'write']
+     CHARACTERISTIC 00002a99-0000-1000-8000-00805f9b34fb (Handle: 38): Database Change Increment ['read', 'write', 'notify']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 40): Client Characteristic Configuration
+     CHARACTERISTIC 00002a9f-0000-1000-8000-00805f9b34fb (Handle: 43): User Control Point ['write', 'indicate']
+         DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 45): Client Characteristic Configuration
+     CHARACTERISTIC 00002a80-0000-1000-8000-00805f9b34fb (Handle: 30): Age ['read', 'write']
+     CHARACTERISTIC 00002a8e-0000-1000-8000-00805f9b34fb (Handle: 34): Height ['read', 'write']
+     CHARACTERISTIC 00002a98-0000-1000-8000-00805f9b34fb (Handle: 36): Weight ['read', 'write']
+     CHARACTERISTIC 00002a9a-0000-1000-8000-00805f9b34fb (Handle: 41): User Index ['read']
