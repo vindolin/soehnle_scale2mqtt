@@ -32,7 +32,7 @@ SERVICE 00001805-0000-1000-8000-00805f9b34fb (Handle: 57): Current Time Service
      CHARACTERISTIC 00002a2b-0000-1000-8000-00805f9b34fb (Handle: 58): Current Time ['read', 'write', 'notify']
          DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 60): Client Characteristic Configuration
      CHARACTERISTIC 00002a0f-0000-1000-8000-00805f9b34fb (Handle: 61): Local Time Information ['read', 'write']
-SERVICE 352e3000-28e9-40b8-a361-6db4cca4147c (Handle: 65): Unknown
+SERVICE 352e3000-28e9-40b8-a361-6db4cca4147c (Handle: 65): Unknown 
      CHARACTERISTIC 352e3003-28e9-40b8-a361-6db4cca4147c (Handle: 72): Unknown ['write']
          DESCRIPTOR 00002902-0000-1000-8000-00805f9b34fb (Handle: 74): Client Characteristic Configuration
      CHARACTERISTIC 352e3004-28e9-40b8-a361-6db4cca4147c (Handle: 75): Unknown ['read', 'notify']

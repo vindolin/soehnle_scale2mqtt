@@ -14,8 +14,8 @@
 constexpr auto BLUE_LED_PIN = 8;
 
 constexpr auto REQUEST_DELAY_MS = 15000; // time to wait before requesting history
-constexpr auto COLLECT_DELAY_MS = 5000; // time to wait to collect measurements from notifications
-constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
+constexpr auto COLLECT_DELAY_MS = 10000; // time to wait to collect measurements from notifications
+constexpr auto BT_DISCONNECT_DELAY_MS = 30000; // time to wait before the next scan when the last measurement didn't change
 // constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to initialize
 constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
 
@@ -64,9 +64,12 @@ static NimBLEUUID SVC_USER_DATA("181c");
 static NimBLEUUID CHR_USER_CONTROL_POINT("2a9f");
 
 static NimBLEUUID SVC_SOEHNLE("352e3000-28e9-40b8-a361-6db4cca4147c");
-static NimBLEUUID CHR_SOEHNLE_A("352e3001-28e9-40b8-a361-6db4cca4147c"); // Measurements
-// static NimBLEUUID CHR_SOEHNLE_B("352e3004-28e9-40b8-a361-6db4cca4147c"); // ??? always returns 0x01 🤷‍♂️
-static NimBLEUUID CHR_SOEHNLE_CMD("352e3002-28e9-40b8-a361-6db4cca4147c"); // Commands
+static NimBLEUUID CHR_MEASUREMENT_NOTIFY("352e3001-28e9-40b8-a361-6db4cca4147c");
+static NimBLEUUID CHR_REQUEST_HISTORY_CMD("352e3002-28e9-40b8-a361-6db4cca4147c");
+
+// static NimBLEUUID SVC_WEIGHT("0000181d-0000-1000-8000-00805f9b34fb");
+// static NimBLEUUID CHR_WEIGHT_INDICATE("00002a9d-0000-1000-8000-00805f9b34fb");
+// static NimBLEUUID CHR_WEIGHT("00002a9e-0000-1000-8000-00805f9b34fb");
 
 NimBLEAdvertisedDevice* scaleDevice = nullptr;
 
@@ -149,15 +152,13 @@ void notifyMeasurement(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_
     }
 }
 
-void notifyBattery(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
-    if (length > 0) {
-        Serial.printf("Battery level: %d%%\n", pData[0]);
-    }
-}
+// void indicateUnknown(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+//     logHexPayload(pData, length);
+// }
 
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* pClient) {
-        Serial.println("Connected to scale");
+        Serial.println("Connected to scale, waiting 15 seconds before requesting history...");
     }
 
     void onDisconnect(NimBLEClient* pClient) {
@@ -201,6 +202,8 @@ bool connectToScaleDevice() {
     NimBLERemoteService* pSvcTime = pClient->getService(SVC_CURRENT_TIME);
     if (pSvcTime) {
         NimBLERemoteCharacteristic* pChrTime = pSvcTime->getCharacteristic(CHR_CURRENT_TIME);
+        Serial.println(pChrTime->getValue()); // just to check if it exists
+        
         if (pChrTime && pChrTime->canWrite()) {
             struct tm timeinfo;
             if (getLocalTime(&timeinfo)) {
@@ -239,12 +242,23 @@ bool connectToScaleDevice() {
     if (pSvcSoehnle) {
 
         // register notify for measurements
-        NimBLERemoteCharacteristic* pChrSoehnleA = pSvcSoehnle->getCharacteristic(CHR_SOEHNLE_A);
-        if (pChrSoehnleA && pChrSoehnleA->canNotify()) {
-            pChrSoehnleA->subscribe(true, notifyMeasurement);
-            Serial.println("Subscribed to measurements, waiting 15 seconds for history request...");
+        NimBLERemoteCharacteristic* pChrMeasurementNotify = pSvcSoehnle->getCharacteristic(CHR_MEASUREMENT_NOTIFY);
+        if (pChrMeasurementNotify && pChrMeasurementNotify->canNotify()) {
+            pChrMeasurementNotify->subscribe(true, notifyMeasurement);
+            Serial.println("Subscribed to measurements...");
         }
     }
+
+    // NimBLERemoteService* pSvcWeight = pClient->getService(SVC_WEIGHT);
+    // if (pSvcWeight) {
+    //     Serial.println("Found Weight Service");
+    //     // register indicate for weight
+    //     NimBLERemoteCharacteristic* pChrWeight = pSvcWeight->getCharacteristic(CHR_WEIGHT_INDICATE);
+    //     if (pChrWeight && pChrWeight->canIndicate()) {
+    //         pChrWeight->subscribe(false, indicateUnknown);
+    //         Serial.println("Subscribed to weight...");
+    //     }
+    // }
 
     return true;
 }
@@ -347,13 +361,13 @@ void requestHistoryForAllUsers() {
 
     NimBLERemoteService* pSvcSoehnle = pClient->getService(SVC_SOEHNLE);
     if (pSvcSoehnle) {
-        NimBLERemoteCharacteristic* pChrSoehnleCmd = pSvcSoehnle->getCharacteristic(CHR_SOEHNLE_CMD);
-        if (pChrSoehnleCmd) {
-             Serial.println("Requesting history for all users...");
+        NimBLERemoteCharacteristic* requestHistoryCommand = pSvcSoehnle->getCharacteristic(CHR_REQUEST_HISTORY_CMD);
+        Serial.println("Requesting history for all users...");
+        if (requestHistoryCommand) {
              for (int i = 1; i <= userCount; i++) {
                  uint8_t cmd[] = {MEASUREMENT_OPCODE, (uint8_t)i};
-                 pChrSoehnleCmd->writeValue(cmd, 2, true);
-                 delay(100);
+                 requestHistoryCommand->writeValue(cmd, 2, true);
+                 delay(500);
              }
         }
     }
@@ -450,6 +464,7 @@ void setup() {
     syncTime();
     
     NimBLEDevice::init("ESP32_SCALE");
+    NimBLEDevice::setPower(ESP_PWR_LVL_P21); // max power
 }
 
 void loop() {
@@ -529,6 +544,7 @@ void loop() {
 
         case AppState::PUBLISHING:
             {
+                return;
                 String jsonString;
                 if (generateMeasurementJson(jsonString)) {
                     Serial.println(jsonString);
