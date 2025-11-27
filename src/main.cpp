@@ -15,7 +15,7 @@ constexpr auto BLUE_LED_PIN = 8;
 
 constexpr auto REQUEST_DELAY_MS = 15000; // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 10000; // time to wait to collect measurements from notifications
-constexpr auto BT_DISCONNECT_DELAY_MS = 30000; // time to wait before the next scan when the last measurement didn't change
+constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
 // constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to initialize
 constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
 
@@ -166,8 +166,6 @@ class ClientCallbacks : public NimBLEClientCallbacks {
         // We don't delete the client here, we'll handle it in the loop
     }
 };
-
-// static ClientCallbacks clientCallbacks;
 
 bool connectToScaleDevice() {
     Serial.printf("Connecting to %s\n", scaleDevice->getAddress().toString().c_str());
@@ -544,11 +542,8 @@ void loop() {
 
         case AppState::PUBLISHING:
             {
-                return;
                 String jsonString;
                 if (generateMeasurementJson(jsonString)) {
-                    Serial.println(jsonString);
-
                     Serial.println("Data collection finished. Disconnecting BLE...");
                     cleanupBleSession();
 
