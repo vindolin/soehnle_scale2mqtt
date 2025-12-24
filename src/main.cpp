@@ -52,8 +52,9 @@ enum class AppState
     SCANNING,
     CONNECTING,
     CONNECTED_WAIT,
-    REQUEST_HISTORY,
-    COLLECTING,
+    WAIT_FOR_MEASUREMENT,
+    // REQUEST_HISTORY,
+    // COLLECTING,
     PUBLISHING,
     WAITING_FOR_SCALE_TO_DISAPPEAR
 };
@@ -129,19 +130,6 @@ void toggleLed()
 uint16_t measurementCount = 0;
 uint32_t loopCount = 0;
 
-// void updateLed()
-// {
-//     if (isBlinking)
-//     {
-//         if (millis() - lastBlinkToggle > 200)
-//         {
-//             lastBlinkToggle = millis();
-//             ledState = !ledState;
-//             setLed(ledState);
-//         }
-//     }
-// }
-
 void logHexPayload(const uint8_t *data, size_t length)
 {
     Serial.print("Received measurement data: ");
@@ -152,15 +140,13 @@ void logHexPayload(const uint8_t *data, size_t length)
     Serial.println();
 }
 
-// this function get's called for each measurement notification
-void notifyMeasurement(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
+void processMeasurementPayload(const uint8_t *data, size_t length)
 {
-    // logHexPayload(pData, length);
 
     measurementCount++;
 
     MeasurementFrame frame;
-    if (!parseMeasurementFrame(pData, length, frame))
+    if (!parseMeasurementFrame(data, length, frame))
     {
         Serial.println("Skipping invalid measurement frame");
         return;
@@ -204,30 +190,38 @@ void notifyMeasurement(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_
     }
 }
 
+// // this function get's called for each measurement notification
+// void notifyMeasurement(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
+// {
+//     // logHexPayload(pData, length);
+//     processMeasurementPayload(pData, length);
+// }
+
 void indicateUnknown(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
     logHexPayload(pData, length);
+    processMeasurementPayload(pData, length);
 }
 
-class ClientCallbacks : public NimBLEClientCallbacks
-{
-    void onConnect(NimBLEClient *pClient)
-    {
-        Serial.println("Connected to scale, waiting 15 seconds before requesting history...");
-    }
+// class ClientCallbacks : public NimBLEClientCallbacks
+// {
+//     void onConnect(NimBLEClient *pClient)
+//     {
+//         Serial.println("Connected to scale, waiting 15 seconds before requesting history...");
+//     }
 
-    void onDisconnect(NimBLEClient *pClient)
-    {
-        Serial.println("Disconnected");
-        // We don't delete the client here, we'll handle it in the loop
-    }
-};
+//     void onDisconnect(NimBLEClient *pClient)
+//     {
+//         Serial.println("Disconnected");
+//         // We don't delete the client here, we'll handle it in the loop
+//     }
+// };
 
 bool connectToScaleDevice()
 {
     Serial.printf("Connecting to %s\n", scaleDevice->getAddress().toString().c_str());
 
     pClient = NimBLEDevice::createClient();
-    pClient->setClientCallbacks(new ClientCallbacks());
+    // pClient->setClientCallbacks(new ClientCallbacks());
     // pClient->setClientCallbacks(&clientCallbacks); // this leads to a crash
 
     if (!pClient->connect(scaleDevice))
@@ -301,19 +295,19 @@ bool connectToScaleDevice()
         }
     }
 
-    // Soehnle Service
-    NimBLERemoteService *pSvcSoehnle = pClient->getService(SVC_SOEHNLE);
-    if (pSvcSoehnle)
-    {
+    // // Soehnle Service
+    // NimBLERemoteService *pSvcSoehnle = pClient->getService(SVC_SOEHNLE);
+    // if (pSvcSoehnle)
+    // {
 
-        // register notify for measurements
-        NimBLERemoteCharacteristic *pChrMeasurementNotify = pSvcSoehnle->getCharacteristic(CHR_MEASUREMENT_NOTIFY);
-        if (pChrMeasurementNotify && pChrMeasurementNotify->canNotify())
-        {
-            pChrMeasurementNotify->subscribe(true, notifyMeasurement);
-            Serial.println("Subscribed to measurements, waiting 12 seconds for notifications...");
-        }
-    }
+    //     // register notify for measurements
+    //     NimBLERemoteCharacteristic *pChrMeasurementNotify = pSvcSoehnle->getCharacteristic(CHR_MEASUREMENT_NOTIFY);
+    //     if (pChrMeasurementNotify && pChrMeasurementNotify->canNotify())
+    //     {
+    //         pChrMeasurementNotify->subscribe(true, notifyMeasurement);
+    //         Serial.println("Subscribed to measurements, waiting 12 seconds for notifications...");
+    //     }
+    // }
 
     NimBLERemoteService* pSvcWeight = pClient->getService(SVC_WEIGHT);
     if (pSvcWeight) {
@@ -670,89 +664,99 @@ void loop()
         }
         if (millis() - stateTimer > REQUEST_DELAY_MS)
         {
-            currentAppState = AppState::REQUEST_HISTORY;
+            // currentAppState = AppState::REQUEST_HISTORY;
+            currentAppState = AppState::WAIT_FOR_MEASUREMENT;
         }
         break;
 
-    case AppState::REQUEST_HISTORY:
-        setLedModeBlink(50, 50);
-        requestHistoryForAllUsers();
-        currentAppState = AppState::COLLECTING;
-        stateTimer = millis();
-        break;
-
-    case AppState::COLLECTING:
+        case AppState::WAIT_FOR_MEASUREMENT:
         if (!pClient || !pClient->isConnected())
         {
-            Serial.println("Lost connection during collecting!");
+            Serial.println("Lost connection while waiting for measurement!");
             cleanupBleSession();
             currentAppState = AppState::SCANNING;
             break;
         }
-        setLedBlinkDurations(
-            map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300),
-            map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300));
 
-        if (millis() - stateTimer > COLLECT_DELAY_MS)
-        {
-            if (latestMeasurement.time == lastPublishedMeasurement.time)
-            {
-                Serial.println("No new measurements received, restarting scan in 45 seconds...");
-                cleanupBleSession();
-                setLed(false);
-                currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
-                break;
-            }
-            Serial.println("Measurement collection complete, [" + String(measurementCount) + "]");
-            lastPublishedMeasurement = latestMeasurement;
-            currentAppState = AppState::PUBLISHING;
-        }
-        break;
+    // case AppState::REQUEST_HISTORY:
+    //     setLedModeBlink(50, 50);
+    //     requestHistoryForAllUsers();
+    //     currentAppState = AppState::COLLECTING;
+    //     stateTimer = millis();
+    //     break;
 
-    case AppState::PUBLISHING:
-    {
-        setLedModeBlink(200, 200);
-        String jsonString;
-        if (generateMeasurementJson(jsonString))
-        {
-            Serial.println("Data collection finished. Disconnecting BLE...");
-            cleanupBleSession();
+    // case AppState::COLLECTING:
+    //     if (!pClient || !pClient->isConnected())
+    //     {
+    //         Serial.println("Lost connection during collecting!");
+    //         cleanupBleSession();
+    //         currentAppState = AppState::SCANNING;
+    //         break;
+    //     }
+    //     setLedBlinkDurations(
+    //         map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300),
+    //         map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300));
 
-            connectToWifi();
-            connectToMqtt();
-            if (mqttClient.publish(MEASUREMENT_TOPIC, jsonString.c_str()))
-            {
-                Serial.println("Data published to MQTT");
-            }
-            else
-            {
-                Serial.println("Failed to publish data");
-            }
-            mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str(), true);
-            mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str(), true);
-            mqttClient.publish(LOOP_COUNT_TOPIC, String(loopCount).c_str(), true);
+    //     if (millis() - stateTimer > COLLECT_DELAY_MS)
+    //     {
+    //         if (latestMeasurement.time == lastPublishedMeasurement.time)
+    //         {
+    //             Serial.println("No new measurements received, restarting scan in 45 seconds...");
+    //             cleanupBleSession();
+    //             setLed(false);
+    //             currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
+    //             break;
+    //         }
+    //         Serial.println("Measurement collection complete, [" + String(measurementCount) + "]");
+    //         lastPublishedMeasurement = latestMeasurement;
+    //         currentAppState = AppState::PUBLISHING;
+    //     }
+    //     break;
 
-            const String timeString = buildCurrentTimeString();
-            mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str(), true);
+    // case AppState::PUBLISHING:
+    // {
+    //     setLedModeBlink(200, 200);
+    //     String jsonString;
+    //     if (generateMeasurementJson(jsonString))
+    //     {
+    //         Serial.println("Data collection finished. Disconnecting BLE...");
+    //         cleanupBleSession();
 
-            mqttClient.loop();
-            delay(1000); // wait for publish
-            disconnectFromMqtt();
-            // disconnectFromWifi();
-        }
-        else
-        {
-            Serial.println("Skipping MQTT publish: no measurements collected");
-            cleanupBleSession();
-        }
+    //         connectToWifi();
+    //         connectToMqtt();
+    //         if (mqttClient.publish(MEASUREMENT_TOPIC, jsonString.c_str()))
+    //         {
+    //             Serial.println("Data published to MQTT");
+    //         }
+    //         else
+    //         {
+    //             Serial.println("Failed to publish data");
+    //         }
+    //         mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str(), true);
+    //         mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str(), true);
+    //         mqttClient.publish(LOOP_COUNT_TOPIC, String(loopCount).c_str(), true);
 
-        Serial.println("Waiting 40 seconds before restarting...");
-        currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
-        stateTimer = millis();
-        setLedModeBlink(2000, 1000);
-        setLedBlinkDurations(1000, 100);
-    }
-    break;
+    //         const String timeString = buildCurrentTimeString();
+    //         mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str(), true);
+
+    //         mqttClient.loop();
+    //         delay(1000); // wait for publish
+    //         disconnectFromMqtt();
+    //         // disconnectFromWifi();
+    //     }
+    //     else
+    //     {
+    //         Serial.println("Skipping MQTT publish: no measurements collected");
+    //         cleanupBleSession();
+    //     }
+
+    //     Serial.println("Waiting 40 seconds before restarting...");
+    //     currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
+    //     stateTimer = millis();
+    //     setLedModeBlink(2000, 1000);
+    //     setLedBlinkDurations(1000, 100);
+    // }
+    // break;
 
     case AppState::WAITING_FOR_SCALE_TO_DISAPPEAR:
         currentMaxBrightness = map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, DEFAULT_MAX_BRIGHTNESS, 0);
