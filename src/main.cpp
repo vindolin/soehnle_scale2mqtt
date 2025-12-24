@@ -140,27 +140,68 @@ void logHexPayload(const uint8_t *data, size_t length)
     Serial.println();
 }
 
-void processMeasurementPayload(const uint8_t *data, size_t length)
+namespace
 {
+constexpr uint16_t BODY_COMP_FLAG_UNITS_IMPERIAL = 0x0001;
+constexpr uint16_t BODY_COMP_FLAG_TIMESTAMP_PRESENT = 0x0002;
+constexpr uint16_t BODY_COMP_FLAG_USER_ID_PRESENT = 0x0004;
+constexpr uint16_t BODY_COMP_FLAG_BASAL_METABOLISM = 0x0008;
+constexpr uint16_t BODY_COMP_FLAG_MUSCLE_PERCENT = 0x0010;
+constexpr uint16_t BODY_COMP_FLAG_MUSCLE_MASS = 0x0020;
+constexpr uint16_t BODY_COMP_FLAG_FAT_FREE_MASS = 0x0040;
+constexpr uint16_t BODY_COMP_FLAG_SOFT_LEAN_MASS = 0x0080;
+constexpr uint16_t BODY_COMP_FLAG_BODY_WATER_MASS = 0x0100;
+constexpr uint16_t BODY_COMP_FLAG_IMPEDANCE = 0x0200;
+constexpr uint16_t BODY_COMP_FLAG_WEIGHT = 0x0400;
+constexpr uint16_t BODY_COMP_FLAG_HEIGHT = 0x0800;
+constexpr uint16_t BODY_COMP_FLAG_MULTI_PACKET = 0x1000;
 
-    measurementCount++;
+float decodeMassKg(uint16_t raw, bool usesImperialUnits)
+{
+    if (raw == 0)
+    {
+        return 0.0f;
+    }
 
+    if (usesImperialUnits)
+    {
+        return raw * 0.01f * 0.45359237f;
+    }
+
+    float kg = raw * 0.005f;
+    if (kg < 10.0f)
+    {
+        // Soehnle appears to use 0.1 kg resolution despite the spec stating 0.005 kg.
+        kg = raw * 0.1f;
+    }
+    return kg;
+}
+
+bool isLegacyMeasurementFrame(const uint8_t *data, size_t length)
+{
+    return length == MEASUREMENT_FRAME_LENGTH && data[0] == MEASUREMENT_OPCODE;
+}
+
+bool buildMeasurementFromLegacyFrame(const uint8_t *data, size_t length, Measurement &outMeasurement)
+{
     MeasurementFrame frame;
     if (!parseMeasurementFrame(data, length, frame))
     {
         Serial.println("Skipping invalid measurement frame");
-        return;
+        return false;
     }
-    if (users.find(frame.pID) == users.end())
+
+    auto userIt = users.find(frame.pID);
+    if (userIt == users.end())
     {
         Serial.printf("Unknown user pID: %d\n", frame.pID);
-        return;
+        return false;
     }
-    const User &user = users[frame.pID];
+    const User &user = userIt->second;
 
-    auto fat = 0.0;
-    auto water = 0.0;
-    auto muscle = 0.0;
+    auto fat = 0.0f;
+    auto water = 0.0f;
+    auto muscle = 0.0f;
     if (frame.imp50 > 0)
     {
         fat = calculateFat(user, frame.weightKg, frame.imp50);
@@ -169,52 +210,286 @@ void processMeasurementPayload(const uint8_t *data, size_t length)
     }
 
     char timeStr[25];
-    snprintf(timeStr, sizeof(timeStr), "%04d-%02d-%02dT%02d:%02d:%02dZ", frame.year, frame.month, frame.day, frame.hour, frame.minute, frame.second);
+    snprintf(timeStr, sizeof(timeStr), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             frame.year, frame.month, frame.day, frame.hour, frame.minute, frame.second);
 
-    Measurement m;
+    outMeasurement.pID = frame.pID;
+    outMeasurement.time = timeStr;
+    outMeasurement.weight = frame.weightKg;
+    outMeasurement.fat = fat;
+    outMeasurement.water = water;
+    outMeasurement.muscle = muscle;
+    return true;
+}
 
-    m.pID = frame.pID;
-    m.time = timeStr;
-    m.weight = frame.weightKg;
-    m.fat = fat;
-    m.water = water;
-    m.muscle = muscle;
-
-    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n",
-                  m.pID, m.time.c_str(), m.weight, m.fat, m.water, m.muscle);
-
-    // we keep only the latest measurement from the notifications
-    if (latestMeasurement.time.isEmpty() || m.time > latestMeasurement.time)
+bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length, Measurement &outMeasurement)
+{
+    if (length < 4)
     {
-        latestMeasurement = m;
+        return false;
+    }
+
+    size_t offset = 0;
+    auto readUInt16 = [&](uint16_t &value) -> bool {
+        if (offset + 2 > length)
+        {
+            Serial.println("Body composition payload truncated (uint16)");
+            return false;
+        }
+        value = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+        offset += 2;
+        return true;
+    };
+
+    const uint16_t flags = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+    offset += 2;
+
+    if (flags & BODY_COMP_FLAG_MULTI_PACKET)
+    {
+        Serial.println("Multiple packet body composition measurements are not supported");
+        return false;
+    }
+
+    uint16_t bodyFatRaw = 0;
+    if (!readUInt16(bodyFatRaw))
+    {
+        return false;
+    }
+    float bodyFatPercent = bodyFatRaw / 10.0f;
+
+    uint16_t year = 0;
+    uint8_t month = 1;
+    uint8_t day = 1;
+    uint8_t hour = 0;
+    uint8_t minute = 0;
+    uint8_t second = 0;
+    if (flags & BODY_COMP_FLAG_TIMESTAMP_PRESENT)
+    {
+        if (offset + 7 > length)
+        {
+            Serial.println("Body composition payload truncated (timestamp)");
+            return false;
+        }
+        year = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+        month = data[offset + 2];
+        day = data[offset + 3];
+        hour = data[offset + 4];
+        minute = data[offset + 5];
+        second = data[offset + 6];
+        offset += 7;
+    }
+    else
+    {
+        time_t now = time(nullptr);
+        struct tm timeinfo;
+        localtime_r(&now, &timeinfo);
+        year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
+        month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
+        day = static_cast<uint8_t>(timeinfo.tm_mday);
+        hour = static_cast<uint8_t>(timeinfo.tm_hour);
+        minute = static_cast<uint8_t>(timeinfo.tm_min);
+        second = static_cast<uint8_t>(timeinfo.tm_sec);
+    }
+
+    uint8_t userId = 0xFF;
+    if (flags & BODY_COMP_FLAG_USER_ID_PRESENT)
+    {
+        if (offset >= length)
+        {
+            Serial.println("Body composition payload truncated (user id)");
+            return false;
+        }
+        userId = data[offset++];
+    }
+
+    if (userId == 0xFF)
+    {
+        Serial.println("Body composition payload missing user id");
+        return false;
+    }
+
+    auto userIt = users.find(userId);
+    if (userIt == users.end())
+    {
+        Serial.printf("Unknown user pID: %d\n", userId);
+        return false;
+    }
+
+    if (flags & BODY_COMP_FLAG_BASAL_METABOLISM)
+    {
+        uint16_t basalRaw = 0;
+        if (!readUInt16(basalRaw))
+        {
+            return false;
+        }
+        // Basal metabolism is currently unused but kept for completeness.
+    }
+
+    float musclePercent = 0.0f;
+    bool hasMusclePercent = false;
+    if (flags & BODY_COMP_FLAG_MUSCLE_PERCENT)
+    {
+        uint16_t raw = 0;
+        if (!readUInt16(raw))
+        {
+            return false;
+        }
+        musclePercent = raw / 10.0f;
+        hasMusclePercent = true;
+    }
+
+    if (flags & BODY_COMP_FLAG_MUSCLE_MASS)
+    {
+        uint16_t skip = 0;
+        if (!readUInt16(skip))
+        {
+            return false;
+        }
+    }
+
+    if (flags & BODY_COMP_FLAG_FAT_FREE_MASS)
+    {
+        uint16_t skip = 0;
+        if (!readUInt16(skip))
+        {
+            return false;
+        }
+    }
+
+    if (flags & BODY_COMP_FLAG_SOFT_LEAN_MASS)
+    {
+        uint16_t skip = 0;
+        if (!readUInt16(skip))
+        {
+            return false;
+        }
+    }
+
+    const bool usesImperialUnits = (flags & BODY_COMP_FLAG_UNITS_IMPERIAL) != 0;
+
+    float bodyWaterMassKg = 0.0f;
+    bool hasBodyWaterMass = false;
+    if (flags & BODY_COMP_FLAG_BODY_WATER_MASS)
+    {
+        uint16_t raw = 0;
+        if (!readUInt16(raw))
+        {
+            return false;
+        }
+        bodyWaterMassKg = decodeMassKg(raw, usesImperialUnits);
+        hasBodyWaterMass = true;
+    }
+
+    float impedanceOhms = 0.0f;
+    if (flags & BODY_COMP_FLAG_IMPEDANCE)
+    {
+        uint16_t raw = 0;
+        if (!readUInt16(raw))
+        {
+            return false;
+        }
+        impedanceOhms = raw / 10.0f;
+    }
+
+    float weightKg = 0.0f;
+    bool hasWeight = false;
+    if (flags & BODY_COMP_FLAG_WEIGHT)
+    {
+        uint16_t raw = 0;
+        if (!readUInt16(raw))
+        {
+            return false;
+        }
+        weightKg = decodeMassKg(raw, usesImperialUnits);
+        hasWeight = true;
+    }
+
+    if (flags & BODY_COMP_FLAG_HEIGHT)
+    {
+        uint16_t skip = 0;
+        if (!readUInt16(skip))
+        {
+            return false;
+        }
+    }
+
+    (void)impedanceOhms; // Currently unused for derived metrics.
+
+    char timeStr[25];
+    snprintf(timeStr, sizeof(timeStr), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+             year, month, day, hour, minute, second);
+
+    outMeasurement = Measurement();
+    outMeasurement.pID = userId;
+    outMeasurement.time = timeStr;
+    outMeasurement.weight = hasWeight ? weightKg : 0.0f;
+    outMeasurement.fat = bodyFatPercent;
+    outMeasurement.muscle = hasMusclePercent ? musclePercent : 0.0f;
+    if (hasBodyWaterMass && hasWeight && weightKg > 0.0f)
+    {
+        outMeasurement.water = (bodyWaterMassKg / weightKg) * 100.0f;
+    }
+    else
+    {
+        outMeasurement.water = 0.0f;
+    }
+
+    return true;
+}
+
+void logAndStoreMeasurement(const Measurement &measurement)
+{
+    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n",
+                  measurement.pID,
+                  measurement.time.c_str(),
+                  measurement.weight,
+                  measurement.fat,
+                  measurement.water,
+                  measurement.muscle);
+
+    if (latestMeasurement.time.isEmpty() || measurement.time > latestMeasurement.time)
+    {
+        latestMeasurement = measurement;
     }
 }
 
-// // this function get's called for each measurement notification
-// void notifyMeasurement(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
-// {
-//     // logHexPayload(pData, length);
-//     processMeasurementPayload(pData, length);
-// }
+} // namespace
 
-void indicateUnknown(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+void processMeasurementPayload(const uint8_t *data, size_t length)
+{
+    measurementCount++;
+
+    Measurement measurement;
+
+    if (isLegacyMeasurementFrame(data, length))
+    {
+        if (buildMeasurementFromLegacyFrame(data, length, measurement))
+        {
+            logAndStoreMeasurement(measurement);
+        }
+        return;
+    }
+
+    if (buildMeasurementFromBodyCompositionFrame(data, length, measurement))
+    {
+        logAndStoreMeasurement(measurement);
+        return;
+    }
+
+    Serial.println("Skipping measurement payload: unsupported format");
+}
+
+void indicateWeight(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+    Serial.println("Weight indication received:");
+    logHexPayload(pData, length);
+    // processMeasurementPayload(pData, length);
+}
+
+void indicateBodyComposition(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+    Serial.println("Body Composition indication received:");
     logHexPayload(pData, length);
     processMeasurementPayload(pData, length);
 }
-
-// class ClientCallbacks : public NimBLEClientCallbacks
-// {
-//     void onConnect(NimBLEClient *pClient)
-//     {
-//         Serial.println("Connected to scale, waiting 15 seconds before requesting history...");
-//     }
-
-//     void onDisconnect(NimBLEClient *pClient)
-//     {
-//         Serial.println("Disconnected");
-//         // We don't delete the client here, we'll handle it in the loop
-//     }
-// };
 
 bool connectToScaleDevice()
 {
@@ -295,27 +570,13 @@ bool connectToScaleDevice()
         }
     }
 
-    // // Soehnle Service
-    // NimBLERemoteService *pSvcSoehnle = pClient->getService(SVC_SOEHNLE);
-    // if (pSvcSoehnle)
-    // {
-
-    //     // register notify for measurements
-    //     NimBLERemoteCharacteristic *pChrMeasurementNotify = pSvcSoehnle->getCharacteristic(CHR_MEASUREMENT_NOTIFY);
-    //     if (pChrMeasurementNotify && pChrMeasurementNotify->canNotify())
-    //     {
-    //         pChrMeasurementNotify->subscribe(true, notifyMeasurement);
-    //         Serial.println("Subscribed to measurements, waiting 12 seconds for notifications...");
-    //     }
-    // }
-
     NimBLERemoteService* pSvcWeight = pClient->getService(SVC_WEIGHT);
     if (pSvcWeight) {
         Serial.println("Found Weight Service");
         // register indicate for weight
         NimBLERemoteCharacteristic* pChrWeight = pSvcWeight->getCharacteristic(CHR_WEIGHT_INDICATE);
         if (pChrWeight && pChrWeight->canIndicate()) {
-            if(pChrWeight->subscribe(false, indicateUnknown)) {
+            if(pChrWeight->subscribe(false, indicateWeight)) {
                 Serial.println("Subscribed to weight...");
             } else {
                 Serial.println("Failed to subscribe to weight!");
@@ -328,7 +589,7 @@ bool connectToScaleDevice()
         Serial.println("Found Body Composition Service");
         NimBLERemoteCharacteristic* pChrBodyComposition = pSvcBodyComposition->getCharacteristic(CHR_BODY_COMPOSITION_MEASUREMENT);
         if (pChrBodyComposition && pChrBodyComposition->canIndicate()) {
-            if (pChrBodyComposition->subscribe(false, indicateUnknown)) {
+            if (pChrBodyComposition->subscribe(false, indicateBodyComposition)) {
                 Serial.println("Subscribed to body composition measurement...");
             } else {
                 Serial.println("Failed to subscribe to body composition measurement!");
@@ -677,86 +938,6 @@ void loop()
             currentAppState = AppState::SCANNING;
             break;
         }
-
-    // case AppState::REQUEST_HISTORY:
-    //     setLedModeBlink(50, 50);
-    //     requestHistoryForAllUsers();
-    //     currentAppState = AppState::COLLECTING;
-    //     stateTimer = millis();
-    //     break;
-
-    // case AppState::COLLECTING:
-    //     if (!pClient || !pClient->isConnected())
-    //     {
-    //         Serial.println("Lost connection during collecting!");
-    //         cleanupBleSession();
-    //         currentAppState = AppState::SCANNING;
-    //         break;
-    //     }
-    //     setLedBlinkDurations(
-    //         map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300),
-    //         map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300));
-
-    //     if (millis() - stateTimer > COLLECT_DELAY_MS)
-    //     {
-    //         if (latestMeasurement.time == lastPublishedMeasurement.time)
-    //         {
-    //             Serial.println("No new measurements received, restarting scan in 45 seconds...");
-    //             cleanupBleSession();
-    //             setLed(false);
-    //             currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
-    //             break;
-    //         }
-    //         Serial.println("Measurement collection complete, [" + String(measurementCount) + "]");
-    //         lastPublishedMeasurement = latestMeasurement;
-    //         currentAppState = AppState::PUBLISHING;
-    //     }
-    //     break;
-
-    // case AppState::PUBLISHING:
-    // {
-    //     setLedModeBlink(200, 200);
-    //     String jsonString;
-    //     if (generateMeasurementJson(jsonString))
-    //     {
-    //         Serial.println("Data collection finished. Disconnecting BLE...");
-    //         cleanupBleSession();
-
-    //         connectToWifi();
-    //         connectToMqtt();
-    //         if (mqttClient.publish(MEASUREMENT_TOPIC, jsonString.c_str()))
-    //         {
-    //             Serial.println("Data published to MQTT");
-    //         }
-    //         else
-    //         {
-    //             Serial.println("Failed to publish data");
-    //         }
-    //         mqttClient.publish(BATTERY_LEVEL_TOPIC, String(batteryLevel).c_str(), true);
-    //         mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str(), true);
-    //         mqttClient.publish(LOOP_COUNT_TOPIC, String(loopCount).c_str(), true);
-
-    //         const String timeString = buildCurrentTimeString();
-    //         mqttClient.publish(MEASUREMENT_TIME_TOPIC, timeString.c_str(), true);
-
-    //         mqttClient.loop();
-    //         delay(1000); // wait for publish
-    //         disconnectFromMqtt();
-    //         // disconnectFromWifi();
-    //     }
-    //     else
-    //     {
-    //         Serial.println("Skipping MQTT publish: no measurements collected");
-    //         cleanupBleSession();
-    //     }
-
-    //     Serial.println("Waiting 40 seconds before restarting...");
-    //     currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
-    //     stateTimer = millis();
-    //     setLedModeBlink(2000, 1000);
-    //     setLedBlinkDurations(1000, 100);
-    // }
-    // break;
 
     case AppState::WAITING_FOR_SCALE_TO_DISAPPEAR:
         currentMaxBrightness = map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, DEFAULT_MAX_BRIGHTNESS, 0);

@@ -55,8 +55,8 @@ float calculateFat(const User& user, float weight, float imp50) {
     float sexCorrFac = user.isMale ? 0.250 : 0.214;
     float activitySexDiv = user.isMale ? 65.5 : 55.1;
 
-    return (1.847 * weight * 10000.0 / (user.height * user.height) + 
-            sexCorrFac * user.age + 0.062 * imp50 - 
+    return (1.847 * weight * 10000.0 / (user.height * user.height) +
+            sexCorrFac * user.age + 0.062 * imp50 -
             (activitySexDiv - activityCorrFac));
 }
 
@@ -66,8 +66,8 @@ float calculateWater(const User& user, float weight, float imp50) {
     else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 3.93 : 0.4;
     else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.33 : 1.4;
 
-    return ((0.3674 * user.height * user.height / imp50 + 
-            0.17530 * weight - 0.11 * user.age + 
+    return ((0.3674 * user.height * user.height / imp50 +
+            0.17530 * weight - 0.11 * user.age +
             (6.53 + activityCorrFac)) / weight * 100.0);
 }
 
@@ -77,8 +77,8 @@ float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
     else if (user.activityLevel == 4) activityCorrFac = user.isMale ? 4.3904 : 0.0;
     else if (user.activityLevel == 5) activityCorrFac = user.isMale ? 5.4144 : 1.664;
 
-    return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height + 
-            0.13796 * weight - 0.1152 * user.age + 
+    return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height +
+            0.13796 * weight - 0.1152 * user.age +
             (5.12 + activityCorrFac)) / weight * 100.0);
 }
 
