@@ -5,21 +5,6 @@
 #include <vector>
 #include <time.h>
 
-struct User {
-    int age;
-    float height;
-    bool isMale;
-    int activityLevel;
-};
-
-std::map<int, User> users = {
-    // age, height, is_male, activity_level (1-5)
-    {1, {50, 159, false, 2}},
-    {2, {55, 180, true, 2}}
-};
-
-uint8_t userCount = static_cast<uint8_t>(users.size());
-
 struct Measurement {
     String time;
     uint8_t pID = 0;
@@ -31,37 +16,12 @@ struct Measurement {
 
 Measurement latestMeasurement;
 
-struct MeasurementFrame {
-    uint8_t pID;
-    uint16_t year;
-    uint8_t month;
-    uint8_t day;
-    uint8_t hour;
-    uint8_t minute;
-    uint8_t second;
-    float weightKg;
-    uint16_t imp5;
-    uint16_t imp50;
-};
-
-struct UserDetectionRule {
-    String name;
-    float minWeightKg;
-    float maxWeightKg;
-};
-
-// Global configuration for users and rules
-extern std::map<String, User> Users;
-extern std::vector<UserDetectionRule> detectionRules;
-
 constexpr auto MEASUREMENT_OPCODE = 0x09;
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
 
-constexpr uint16_t BODY_COMP_FLAG_TIMESTAMP_PRESENT = 0x0002;
 constexpr uint16_t BODY_COMP_FLAG_USER_ID_PRESENT = 0x0004;
 constexpr uint16_t BODY_COMP_FLAG_MUSCLE_PERCENT = 0x0010;
 constexpr uint16_t BODY_COMP_FLAG_BODY_WATER_MASS = 0x0100;
-constexpr uint16_t BODY_COMP_FLAG_IMPEDANCE = 0x0200;
 constexpr uint16_t BODY_COMP_FLAG_WEIGHT = 0x0400;
 
 float decodeMassKg(uint16_t raw) {
@@ -109,29 +69,16 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     uint8_t hour = 0;
     uint8_t minute = 0;
     uint8_t second = 0;
-    if (flags & BODY_COMP_FLAG_TIMESTAMP_PRESENT) {
-        if (offset + 7 > length) {
-            Serial.println("Body composition payload truncated (timestamp)");
-            return false;
-        }
-        year = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-        month = data[offset + 2];
-        day = data[offset + 3];
-        hour = data[offset + 4];
-        minute = data[offset + 5];
-        second = data[offset + 6];
-        offset += 7;
-    } else {
-        time_t now = time(nullptr);
-        struct tm timeinfo;
-        localtime_r(&now, &timeinfo);
-        year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
-        month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
-        day = static_cast<uint8_t>(timeinfo.tm_mday);
-        hour = static_cast<uint8_t>(timeinfo.tm_hour);
-        minute = static_cast<uint8_t>(timeinfo.tm_min);
-        second = static_cast<uint8_t>(timeinfo.tm_sec);
-    }
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+
+    localtime_r(&now, &timeinfo);
+    year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
+    month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
+    day = static_cast<uint8_t>(timeinfo.tm_mday);
+    hour = static_cast<uint8_t>(timeinfo.tm_hour);
+    minute = static_cast<uint8_t>(timeinfo.tm_min);
+    second = static_cast<uint8_t>(timeinfo.tm_sec);
 
     uint8_t userId = 0xFF;
     if (flags & BODY_COMP_FLAG_USER_ID_PRESENT) {
@@ -144,12 +91,6 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
 
     if (userId == 0xFF) {
         Serial.println("Body composition payload missing user id");
-        return false;
-    }
-
-    auto userIt = users.find(userId);
-    if (userIt == users.end()) {
-        Serial.printf("Unknown user pID: %d\n", userId);
         return false;
     }
 
@@ -175,15 +116,6 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         hasBodyWaterMass = true;
     }
 
-    float impedanceOhms = 0.0f;
-    if (flags & BODY_COMP_FLAG_IMPEDANCE) {
-        uint16_t raw = 0;
-        if (!readUInt16(raw)) {
-            return false;
-        }
-        impedanceOhms = raw / 10.0f;
-    }
-
     float weightKg = 0.0f;
     bool hasWeight = false;
     if (flags & BODY_COMP_FLAG_WEIGHT) {
@@ -194,8 +126,6 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         weightKg = decodeMassKg(raw);
         hasWeight = true;
     }
-
-    (void)impedanceOhms; // Currently unused for derived metrics.
 
     char timeStr[25];
     snprintf(timeStr, sizeof(timeStr), "%04u-%02u-%02uT%02u:%02u:%02uZ",
