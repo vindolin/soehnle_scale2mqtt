@@ -20,7 +20,6 @@ constexpr int DEFAULT_MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
 int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
 
 constexpr auto REQUEST_DELAY_MS = 15000;       // time to wait before requesting history
-constexpr auto COLLECT_DELAY_MS = 12000;       // time to wait to collect measurements from notifications
 constexpr auto BT_DISCONNECT_DELAY_MS = 45000; // time to wait before the next scan when the last measurement
                                                // didn't change
 // constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to
@@ -225,7 +224,7 @@ class BLEScanCallbacks : public NimBLEScanCallbacks {
             String name = advertisedDevice->getName().c_str();
             String mac = advertisedDevice->getAddress().toString().c_str();
 
-            Serial.printf("Device: %s @ %s\n", name.c_str(), mac.c_str());
+            // Serial.printf("Device: %s @ %s\n", name.c_str(), mac.c_str());
 
             if (name.indexOf(SCALE_DEVICE_NAME) >= 0) {
                 Serial.printf("Found Scale: %s @ %s\n", name.c_str(), mac.c_str());
@@ -352,14 +351,14 @@ bool generateMeasurementJson(String &outJson) {
     if (latestMeasurement.time.isEmpty()) {
         return false;
     }
-    DynamicJsonDocument doc(512);
+    DynamicJsonDocument doc(256);
 
     doc["p_id"] = latestMeasurement.pID;
     doc["time"] = latestMeasurement.time;
-    doc["weight"] = latestMeasurement.weight;
-    doc["fat"] = latestMeasurement.fat;
-    doc["water"] = latestMeasurement.water;
-    doc["muscle"] = latestMeasurement.muscle;
+    doc["weight"] = round(latestMeasurement.weight * 10.0) / 10.0;
+    doc["fat"] = round(latestMeasurement.fat * 10.0) / 10.0;
+    doc["water"] = round(latestMeasurement.water * 10.0) / 10.0;
+    doc["muscle"] = round(latestMeasurement.muscle * 10.0) / 10.0;
     serializeJson(doc, outJson);
     return true;
 }

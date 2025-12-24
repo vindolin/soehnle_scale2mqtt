@@ -19,6 +19,7 @@ Measurement latestMeasurement;
 constexpr auto MEASUREMENT_OPCODE = 0x09;
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
 
+constexpr uint16_t BODY_COMP_FLAG_TIMESTAMP_PRESENT = 0x0002;
 constexpr uint16_t BODY_COMP_FLAG_USER_ID_PRESENT = 0x0004;
 constexpr uint16_t BODY_COMP_FLAG_BASAL_METABOLISM_PRESENT = 0x0008;
 constexpr uint16_t BODY_COMP_FLAG_MUSCLE_PERCENT = 0x0010;
@@ -70,16 +71,20 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     uint8_t hour = 0;
     uint8_t minute = 0;
     uint8_t second = 0;
-    time_t now = time(nullptr);
-    struct tm timeinfo;
 
-    localtime_r(&now, &timeinfo);
-    year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
-    month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
-    day = static_cast<uint8_t>(timeinfo.tm_mday);
-    hour = static_cast<uint8_t>(timeinfo.tm_hour);
-    minute = static_cast<uint8_t>(timeinfo.tm_min);
-    second = static_cast<uint8_t>(timeinfo.tm_sec);
+    if (flags & BODY_COMP_FLAG_TIMESTAMP_PRESENT) {
+        if (offset + 7 > length) {
+            Serial.println("Body composition payload truncated (timestamp)");
+            return false;
+        }
+        year = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+        month = data[offset + 2];
+        day = data[offset + 3];
+        hour = data[offset + 4];
+        minute = data[offset + 5];
+        second = data[offset + 6];
+        offset += 7;
+    }
 
     uint8_t userId = 0xFF;
     if (flags & BODY_COMP_FLAG_USER_ID_PRESENT) {
