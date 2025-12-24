@@ -20,6 +20,7 @@ constexpr auto MEASUREMENT_OPCODE = 0x09;
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
 
 constexpr uint16_t BODY_COMP_FLAG_USER_ID_PRESENT = 0x0004;
+constexpr uint16_t BODY_COMP_FLAG_BASAL_METABOLISM_PRESENT = 0x0008;
 constexpr uint16_t BODY_COMP_FLAG_MUSCLE_PERCENT = 0x0010;
 constexpr uint16_t BODY_COMP_FLAG_BODY_WATER_MASS = 0x0100;
 constexpr uint16_t BODY_COMP_FLAG_WEIGHT = 0x0400;
@@ -92,6 +93,13 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     if (userId == 0xFF) {
         Serial.println("Body composition payload missing user id");
         return false;
+    }
+
+    if (flags & BODY_COMP_FLAG_BASAL_METABOLISM_PRESENT) {
+        uint16_t raw = 0;
+        if (!readUInt16(raw)) {
+            return false;
+        }
     }
 
     float musclePercent = 0.0f;
