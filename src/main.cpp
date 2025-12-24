@@ -483,13 +483,15 @@ void loop() {
             char batteryStr[4];
             snprintf(batteryStr, sizeof(batteryStr), "%d", batteryLevel);
             mqttClient.publish((String(MAIN_TOPIC) + BATTERY_LEVEL_TOPIC).c_str(), batteryStr, true);
+            mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str(), true);
+            mqttClient.publish(LOOP_COUNT_TOPIC, String(loopCount).c_str(), true);
 
             // Publish measurement
             {
                 String measurementJson;
                 if (generateMeasurementJson(measurementJson)) {
                     mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TOPIC).c_str(), measurementJson.c_str(), true);
-                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TIME_TOPIC).c_str(), latestMeasurement.time.c_str(), true);
+                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TIME_TOPIC).c_str(), buildCurrentTimeString().c_str(), true);
 
                     char countStr[12];
                     snprintf(countStr, sizeof(countStr), "%d", measurementCount);
