@@ -97,9 +97,12 @@ static NimBLEUUID SVC_SOEHNLE("352e3000-28e9-40b8-a361-6db4cca4147c");
 static NimBLEUUID CHR_MEASUREMENT_NOTIFY("352e3001-28e9-40b8-a361-6db4cca4147c");
 static NimBLEUUID CHR_REQUEST_HISTORY("352e3002-28e9-40b8-a361-6db4cca4147c");
 
-// static NimBLEUUID SVC_WEIGHT("0000181d-0000-1000-8000-00805f9b34fb");
-// static NimBLEUUID CHR_WEIGHT_INDICATE("00002a9d-0000-1000-8000-00805f9b34fb");
-// static NimBLEUUID CHR_WEIGHT("00002a9e-0000-1000-8000-00805f9b34fb");
+static NimBLEUUID SVC_WEIGHT("0000181d-0000-1000-8000-00805f9b34fb");
+static NimBLEUUID CHR_WEIGHT_INDICATE("00002a9d-0000-1000-8000-00805f9b34fb");
+static NimBLEUUID CHR_WEIGHT("00002a9e-0000-1000-8000-00805f9b34fb");
+
+static NimBLEUUID SVC_BODY_COMPOSITION("0000181b-0000-1000-8000-00805f9b34fb");
+static NimBLEUUID CHR_BODY_COMPOSITION_MEASUREMENT("00002a9c-0000-1000-8000-00805f9b34fb");
 
 NimBLEAdvertisedDevice *scaleDevice = nullptr;
 
@@ -201,9 +204,9 @@ void notifyMeasurement(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_
     }
 }
 
-// void indicateUnknown(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
-//     logHexPayload(pData, length);
-// }
+void indicateUnknown(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+    logHexPayload(pData, length);
+}
 
 class ClientCallbacks : public NimBLEClientCallbacks
 {
@@ -312,16 +315,32 @@ bool connectToScaleDevice()
         }
     }
 
-    // NimBLERemoteService* pSvcWeight = pClient->getService(SVC_WEIGHT);
-    // if (pSvcWeight) {
-    //     Serial.println("Found Weight Service");
-    //     // register indicate for weight
-    //     NimBLERemoteCharacteristic* pChrWeight = pSvcWeight->getCharacteristic(CHR_WEIGHT_INDICATE);
-    //     if (pChrWeight && pChrWeight->canIndicate()) {
-    //         pChrWeight->subscribe(false, indicateUnknown);
-    //         Serial.println("Subscribed to weight...");
-    //     }
-    // }
+    NimBLERemoteService* pSvcWeight = pClient->getService(SVC_WEIGHT);
+    if (pSvcWeight) {
+        Serial.println("Found Weight Service");
+        // register indicate for weight
+        NimBLERemoteCharacteristic* pChrWeight = pSvcWeight->getCharacteristic(CHR_WEIGHT_INDICATE);
+        if (pChrWeight && pChrWeight->canIndicate()) {
+            if(pChrWeight->subscribe(false, indicateUnknown)) {
+                Serial.println("Subscribed to weight...");
+            } else {
+                Serial.println("Failed to subscribe to weight!");
+            }
+        }
+    }
+
+    NimBLERemoteService* pSvcBodyComposition = pClient->getService(SVC_BODY_COMPOSITION);
+    if (pSvcBodyComposition) {
+        Serial.println("Found Body Composition Service");
+        NimBLERemoteCharacteristic* pChrBodyComposition = pSvcBodyComposition->getCharacteristic(CHR_BODY_COMPOSITION_MEASUREMENT);
+        if (pChrBodyComposition && pChrBodyComposition->canIndicate()) {
+            if (pChrBodyComposition->subscribe(false, indicateUnknown)) {
+                Serial.println("Subscribed to body composition measurement...");
+            } else {
+                Serial.println("Failed to subscribe to body composition measurement!");
+            }
+        }
+    }
 
     return true;
 }
@@ -572,6 +591,8 @@ void setup()
 
     NimBLEDevice::init("ESP32_SCALE");
     NimBLEDevice::setPower(ESP_PWR_LVL_P21); // max power
+    NimBLEDevice::setSecurityAuth(true, true, true);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 }
 
 void setLedBlinkDurations(uint16_t onDurationMs, uint16_t offDurationMs)
