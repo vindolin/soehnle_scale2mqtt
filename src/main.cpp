@@ -46,7 +46,7 @@ const char *LOOP_COUNT_TOPIC = "loopCount";
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-enum class AppState { SCANNING, CONNECTING, CONNECTED_WAIT, WAIT_FOR_MEASUREMENT, PUBLISH_MEASUREMENT, WAITING_FOR_SCALE_TO_DISAPPEAR };
+enum class AppState { SCANNING, CONNECTING, CONNECTED_WAIT, WAIT_FOR_MEASUREMENT, PUBLISH_MEASUREMENT, WAIT_FOR_SCALE_TO_DISAPPEAR };
 
 AppState currentAppState = AppState::SCANNING;
 unsigned long stateTimer = 0;
@@ -421,123 +421,125 @@ void loop() {
     checkRestart();
 
     switch (currentAppState) {
-    case AppState::SCANNING:
-        if (scaleDevice != nullptr) {
-            currentAppState = AppState::CONNECTING;
-        } else {
-            NimBLEScan *pScan = NimBLEDevice::getScan();
-            if (!pScan->isScanning()) {
-                setLedModeBlink(100, 2000);
-                startScan();
-            }
-        }
-        break;
-
-    case AppState::CONNECTING:
-        loopCount++;
-
-        setLedModeBlink(50, 100);
-
-        latestMeasurement = Measurement(); // Clear previous measurement
-        if (connectToScaleDevice()) {
-            setLedModeBlink(100, 100);
-            currentAppState = AppState::CONNECTED_WAIT;
-            stateTimer = millis();
-        } else {
-            Serial.println("Failed to connect, restarting scan...");
+        case AppState::SCANNING:
             if (scaleDevice != nullptr) {
-                delete scaleDevice;
-                scaleDevice = nullptr;
-            }
-            currentAppState = AppState::SCANNING;
-        }
-        break;
-
-    case AppState::CONNECTED_WAIT:
-        if (!pClient || !pClient->isConnected()) {
-            Serial.println("Lost connection during wait!");
-            cleanupBleSession();
-            currentAppState = AppState::SCANNING;
-            break;
-        }
-        if (millis() - stateTimer > REQUEST_DELAY_MS) {
-            currentAppState = AppState::WAIT_FOR_MEASUREMENT;
-        }
-        break;
-
-    case AppState::WAIT_FOR_MEASUREMENT:
-        if (!pClient || !pClient->isConnected()) {
-            Serial.println("Lost connection while waiting for measurement!");
-            cleanupBleSession();
-            currentAppState = AppState::SCANNING;
-            break;
-        }
-        break;
-
-    case AppState::PUBLISH_MEASUREMENT:
-        disconnectFromScaleDevice();
-
-        connectToWifi();
-        connectToMqtt();
-
-        // Publish battery level
-        char batteryStr[4];
-        snprintf(batteryStr, sizeof(batteryStr), "%d", batteryLevel);
-        mqttClient.publish((String(MAIN_TOPIC) + BATTERY_LEVEL_TOPIC).c_str(), batteryStr, true);
-
-        // Publish measurement
-        {
-            String measurementJson;
-            if (generateMeasurementJson(measurementJson)) {
-                mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TOPIC).c_str(), measurementJson.c_str(), true);
-                mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TIME_TOPIC).c_str(), latestMeasurement.time.c_str(), true);
-
-                char countStr[12];
-                snprintf(countStr, sizeof(countStr), "%d", measurementCount);
-                mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_COUNT_TOPIC).c_str(), countStr, true);
-
-                Serial.printf("Published measurement: %s\n", measurementJson.c_str());
+                currentAppState = AppState::CONNECTING;
             } else {
-                Serial.println("No valid measurement to publish");
+                NimBLEScan *pScan = NimBLEDevice::getScan();
+                if (!pScan->isScanning()) {
+                    setLedModeBlink(100, 2000);
+                    startScan();
+                }
             }
-        }
+            break;
 
-        mqttClient.loop();
-        delay(1000); // wait for publishes
+        case AppState::CONNECTING:
+            loopCount++;
 
-        disconnectFromMqtt();
+            setLedModeBlink(50, 100);
 
-        lastPublishedMeasurement = latestMeasurement;
+            latestMeasurement = Measurement(); // Clear previous measurement
+            if (connectToScaleDevice()) {
+                setLedModeBlink(100, 100);
+                currentAppState = AppState::CONNECTED_WAIT;
+                stateTimer = millis();
+            } else {
+                Serial.println("Failed to connect, restarting scan...");
+                if (scaleDevice != nullptr) {
+                    delete scaleDevice;
+                    scaleDevice = nullptr;
+                }
+                currentAppState = AppState::SCANNING;
+            }
+            break;
 
-        stateTimer = millis();
-        currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
-        break;
+        case AppState::CONNECTED_WAIT:
+            if (!pClient || !pClient->isConnected()) {
+                Serial.println("Lost connection during wait!");
+                cleanupBleSession();
+                currentAppState = AppState::SCANNING;
+                break;
+            }
+            if (millis() - stateTimer > REQUEST_DELAY_MS) {
+                currentAppState = AppState::WAIT_FOR_MEASUREMENT;
+            }
+            break;
 
-    case AppState::WAITING_FOR_SCALE_TO_DISAPPEAR:
-        currentMaxBrightness = map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, DEFAULT_MAX_BRIGHTNESS, 0);
-        currentMaxBrightness = constrain(currentMaxBrightness, 0, DEFAULT_MAX_BRIGHTNESS);
+        case AppState::WAIT_FOR_MEASUREMENT:
+            if (!pClient || !pClient->isConnected()) {
+                Serial.println("Lost connection while waiting for measurement!");
+                cleanupBleSession();
+                currentAppState = AppState::SCANNING;
+                break;
+            }
+            break;
 
-        if (millis() - stateTimer > BT_DISCONNECT_DELAY_MS) {
-            currentAppState = AppState::SCANNING;
-        }
-        break;
+        case AppState::PUBLISH_MEASUREMENT:
+            disconnectFromScaleDevice();
+
+            connectToWifi();
+            connectToMqtt();
+
+            // Publish battery level
+            char batteryStr[4];
+            snprintf(batteryStr, sizeof(batteryStr), "%d", batteryLevel);
+            mqttClient.publish((String(MAIN_TOPIC) + BATTERY_LEVEL_TOPIC).c_str(), batteryStr, true);
+
+            // Publish measurement
+            {
+                String measurementJson;
+                if (generateMeasurementJson(measurementJson)) {
+                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TOPIC).c_str(), measurementJson.c_str(), true);
+                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TIME_TOPIC).c_str(), latestMeasurement.time.c_str(), true);
+
+                    char countStr[12];
+                    snprintf(countStr, sizeof(countStr), "%d", measurementCount);
+                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_COUNT_TOPIC).c_str(), countStr, true);
+
+                    Serial.printf("Published measurement: %s\n", measurementJson.c_str());
+                } else {
+                    Serial.println("No valid measurement to publish");
+                }
+            }
+
+            mqttClient.loop();
+            delay(1000); // wait for publishes
+
+            disconnectFromMqtt();
+
+            lastPublishedMeasurement = latestMeasurement;
+
+            stateTimer = millis();
+            currentAppState = AppState::WAIT_FOR_SCALE_TO_DISAPPEAR;
+            break;
+
+        case AppState::WAIT_FOR_SCALE_TO_DISAPPEAR:
+            currentMaxBrightness = map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, DEFAULT_MAX_BRIGHTNESS, 0);
+            currentMaxBrightness = constrain(currentMaxBrightness, 0, DEFAULT_MAX_BRIGHTNESS);
+
+            if (millis() - stateTimer > BT_DISCONNECT_DELAY_MS) {
+                currentAppState = AppState::SCANNING;
+            }
+            break;
 
     } // end switch app state
 
     switch (currentLedMode) {
-    case LedMode::PULSE: {
-        unsigned long period = blinkOnDurationMs + blinkOffDurationMs;
-        if (period == 0)
-            period = 1000;
+        case LedMode::PULSE: {
+            unsigned long period = blinkOnDurationMs + blinkOffDurationMs;
+            if (period == 0)
+                period = 1000;
 
-        float phase = (float)(millis() % period) / period * 2 * PI;
-        float val = (1.0f - cos(phase)) / 2.0f;
+            float phase = (float)(millis() % period) / period * 2 * PI;
+            float val = (1.0f - cos(phase)) / 2.0f;
 
-        int brightness = val * currentMaxBrightness;
-        int duty = MAX_DUTY - brightness; // Active LOW
-        ledcWrite(PWM_CHANNEL, duty);
-    } break;
-    case LedMode::OFF:
-        break;
+            int brightness = val * currentMaxBrightness;
+            int duty = MAX_DUTY - brightness; // Active LOW
+            ledcWrite(PWM_CHANNEL, duty);
+            break;
+        }
+
+        case LedMode::OFF:
+            break;
     } // end switch led mode
 }
