@@ -32,28 +32,21 @@ constexpr size_t MQTT_BUFFER_SIZE = 1024;
 const auto GMT_OFFSET_SEC = 3600;
 const auto DAYLIGHT_OFFSET_SEC = 3600;
 
-const char *BOOT_TIME_TOPIC = "smartscale/bootTime";
-const char *BATTERY_LEVEL_TOPIC = "smartscale/battery";
+const char *MAIN_TOPIC = "smartscale2/";
 
-const char *MEASUREMENT_TOPIC = "smartscale/measurement";
-const char *MEASUREMENT_TIME_TOPIC = "smartscale/measurementTime";
-const char *MEASUREMENT_COUNT_TOPIC = "smartscale/measurementCount";
+const char *BOOT_TIME_TOPIC = "bootTime";
+const char *BATTERY_LEVEL_TOPIC = "battery";
 
-const char *LOOP_COUNT_TOPIC = "smartscale/loopCount";
+const char *MEASUREMENT_TOPIC = "measurement";
+const char *MEASUREMENT_TIME_TOPIC = "measurementTime";
+const char *MEASUREMENT_COUNT_TOPIC = "measurementCount";
+
+const char *LOOP_COUNT_TOPIC = "loopCount";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-enum class AppState {
-    SCANNING,
-    CONNECTING,
-    CONNECTED_WAIT,
-    WAIT_FOR_MEASUREMENT,
-    // REQUEST_HISTORY,
-    // COLLECTING,
-    PUBLISHING,
-    WAITING_FOR_SCALE_TO_DISAPPEAR
-};
+enum class AppState { SCANNING, CONNECTING, CONNECTED_WAIT, WAIT_FOR_MEASUREMENT, PUBLISH_MEASUREMENT, WAITING_FOR_SCALE_TO_DISAPPEAR };
 
 AppState currentAppState = AppState::SCANNING;
 unsigned long stateTimer = 0;
@@ -122,7 +115,8 @@ void processMeasurementPayload(const uint8_t *data, size_t length) {
     Measurement measurement;
 
     if (buildMeasurementFromBodyCompositionFrame(data, length, measurement)) {
-        logAndStoreMeasurement(measurement);
+        storeMeasurement(measurement);
+        currentAppState = AppState::PUBLISH_MEASUREMENT;
         return;
     }
 
@@ -301,7 +295,6 @@ void disconnectFromWifi() {
 
 void startScan() {
     NimBLEScan *pBLEScan = NimBLEDevice::getScan();
-    // pBLEScan->setScanCallbacks(new BLEScanCallbacks());
     pBLEScan->setScanCallbacks(&scanCallbacks);
     if (pBLEScan->start(0, false)) {
         Serial.println("BLE scan started successfully, waiting for scale device...");
@@ -330,7 +323,7 @@ void syncTime() {
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
         connectToMqtt();
-        mqttClient.publish(BOOT_TIME_TOPIC, buildCurrentTimeString().c_str(), true);
+        mqttClient.publish((String(MAIN_TOPIC) + BOOT_TIME_TOPIC).c_str(), buildCurrentTimeString().c_str(), true);
         mqttClient.loop();
         delay(1000); // wait for publish
         disconnectFromMqtt();
@@ -479,6 +472,46 @@ void loop() {
             currentAppState = AppState::SCANNING;
             break;
         }
+        break;
+
+    case AppState::PUBLISH_MEASUREMENT:
+        disconnectFromScaleDevice();
+
+        connectToWifi();
+        connectToMqtt();
+
+        // Publish battery level
+        char batteryStr[4];
+        snprintf(batteryStr, sizeof(batteryStr), "%d", batteryLevel);
+        mqttClient.publish((String(MAIN_TOPIC) + BATTERY_LEVEL_TOPIC).c_str(), batteryStr, true);
+
+        // Publish measurement
+        {
+            String measurementJson;
+            if (generateMeasurementJson(measurementJson)) {
+                mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TOPIC).c_str(), measurementJson.c_str(), true);
+                mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TIME_TOPIC).c_str(), latestMeasurement.time.c_str(), true);
+
+                char countStr[12];
+                snprintf(countStr, sizeof(countStr), "%d", measurementCount);
+                mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_COUNT_TOPIC).c_str(), countStr, true);
+
+                Serial.printf("Published measurement: %s\n", measurementJson.c_str());
+            } else {
+                Serial.println("No valid measurement to publish");
+            }
+        }
+
+        mqttClient.loop();
+        delay(1000); // wait for publishes
+
+        disconnectFromMqtt();
+
+        lastPublishedMeasurement = latestMeasurement;
+
+        stateTimer = millis();
+        currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
+        break;
 
     case AppState::WAITING_FOR_SCALE_TO_DISAPPEAR:
         currentMaxBrightness = map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, DEFAULT_MAX_BRIGHTNESS, 0);

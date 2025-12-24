@@ -153,7 +153,7 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     return true;
 }
 
-void logAndStoreMeasurement(const Measurement &measurement) {
+void storeMeasurement(const Measurement &measurement) {
     Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n", measurement.pID, measurement.time.c_str(), measurement.weight, measurement.fat, measurement.water,
                   measurement.muscle);
 
