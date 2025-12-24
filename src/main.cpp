@@ -13,6 +13,13 @@
 
 constexpr auto BLUE_LED_PIN = 8;
 
+// PWM Configuration
+constexpr int PWM_CHANNEL = 0;
+constexpr int PWM_FREQ = 5000;
+constexpr int PWM_RESOLUTION = 8;
+constexpr int MAX_DUTY = 255;
+constexpr int MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
+
 constexpr auto REQUEST_DELAY_MS = 15000;       // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 12000;       // time to wait to collect measurements from notifications
 constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
@@ -33,8 +40,6 @@ const char *MEASUREMENT_COUNT_TOPIC = "smartscale/measurementCount";
 
 const char *LOOP_COUNT_TOPIC = "smartscale/loopCount";
 
-bool LED_ON = LOW;
-bool LED_OFF = HIGH;
 
 Measurement latestMeasurement;
 
@@ -63,15 +68,14 @@ enum class BlinkState
 
 enum class LedMode
 {
-    BLINK_ON,
-    BLINK_OFF,
+    PULSE,
     OFF,
 };
 
 uint16_t blinkOnDurationMs = 200;
 uint16_t blinkOffDurationMs = 800;
 
-LedMode currentLedMode = LedMode::BLINK_OFF;
+LedMode currentLedMode = LedMode::OFF;
 unsigned long lastBlinkToggle = 0;
 
 NimBLEClient *pClient = nullptr;
@@ -104,10 +108,12 @@ Measurement lastPublishedMeasurement;
 
 void setLed(bool on)
 {
-    digitalWrite(BLUE_LED_PIN, on ? LED_ON : LED_OFF);
+    // Active LOW: 0 is ON (Max brightness), 255 is OFF.
+    int duty = on ? (MAX_DUTY - MAX_BRIGHTNESS) : MAX_DUTY;
+    ledcWrite(PWM_CHANNEL, duty);
 }
 
-bool ledState = LED_OFF;
+bool ledState = false;
 
 void toggleLed()
 {
@@ -553,7 +559,9 @@ void setup()
     Serial.begin(115200);
     delay(SERIAL_STARTUP_DELAY_MS); // Wait for CDC Serial to initialize
 
-    pinMode(BLUE_LED_PIN, OUTPUT);
+    // Configure PWM
+    ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttachPin(BLUE_LED_PIN, PWM_CHANNEL);
     setLed(false);
 
     mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
@@ -573,13 +581,14 @@ void setLedBlinkDurations(uint16_t onDurationMs, uint16_t offDurationMs)
 
 void setLedModeBlink(uint16_t onDurationMs = 200, uint16_t offDurationMs = 800)
 {
-    currentLedMode = LedMode::BLINK_ON;
+    currentLedMode = LedMode::PULSE;
     setLedBlinkDurations(onDurationMs, offDurationMs);
 }
 
 void setLedModeOff()
 {
     currentLedMode = LedMode::OFF;
+    setLed(false);
 }
 
 void loop()
@@ -737,28 +746,21 @@ void loop()
 
     switch (currentLedMode)
     {
-    case LedMode::BLINK_ON:
-        if (millis() - lastBlinkToggle > blinkOffDurationMs)
-        {
-            lastBlinkToggle = millis();
-            setLed(LED_ON);
-            currentLedMode = LedMode::BLINK_OFF;
-        }
-        break;
-    case LedMode::BLINK_OFF:
-        if (millis() - lastBlinkToggle > blinkOnDurationMs)
-        {
-            lastBlinkToggle = millis();
-            setLed(LED_OFF);
-            currentLedMode = LedMode::BLINK_ON;
-        }
-        break;
+    case LedMode::PULSE:
+    {
+        unsigned long period = blinkOnDurationMs + blinkOffDurationMs;
+        if (period == 0)
+            period = 1000;
+
+        float phase = (float)(millis() % period) / period * 2 * PI;
+        float val = (1.0f - cos(phase)) / 2.0f;
+
+        int brightness = val * MAX_BRIGHTNESS;
+        int duty = MAX_DUTY - brightness; // Active LOW
+        ledcWrite(PWM_CHANNEL, duty);
+    }
+    break;
     case LedMode::OFF:
-        if (currentLedMode != LedMode::OFF)
-        {
-            setLed(LED_OFF);
-            currentLedMode = LedMode::OFF;
-        }
         break;
     } // end switch led mode
 }
