@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 #include <map>
 #include <vector>
 
@@ -80,22 +81,4 @@ float calculateMuscle(const User& user, float weight, float imp50, float imp5) {
     return (((0.47027 / imp50 - 0.24196 / imp5) * user.height * user.height +
             0.13796 * weight - 0.1152 * user.age +
             (5.12 + activityCorrFac)) / weight * 100.0);
-}
-
-bool parseMeasurementFrame(const uint8_t* data, size_t length, MeasurementFrame& frame) {
-    if (length != MEASUREMENT_FRAME_LENGTH || data[0] != MEASUREMENT_OPCODE) {
-        return false;
-    }
-
-    frame.pID = data[1];
-    frame.year = (data[2] << 8) | data[3];
-    frame.month = data[4];
-    frame.day = data[5];
-    frame.hour = data[6];
-    frame.minute = data[7];
-    frame.second = data[8];
-    frame.weightKg = static_cast<float>((data[9] << 8) | data[10]) / 10.0f;
-    frame.imp5 = (data[11] << 8) | data[12];
-    frame.imp50 = (data[13] << 8) | data[14];
-    return true;
 }
