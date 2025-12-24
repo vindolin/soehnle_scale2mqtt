@@ -18,11 +18,12 @@ constexpr int PWM_CHANNEL = 0;
 constexpr int PWM_FREQ = 5000;
 constexpr int PWM_RESOLUTION = 8;
 constexpr int MAX_DUTY = 255;
-constexpr int MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
+constexpr int DEFAULT_MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
+int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
 
 constexpr auto REQUEST_DELAY_MS = 15000;       // time to wait before requesting history
 constexpr auto COLLECT_DELAY_MS = 12000;       // time to wait to collect measurements from notifications
-constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
+constexpr auto BT_DISCONNECT_DELAY_MS = 45000; // time to wait before the next scan when the last measurement didn't change
 // constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to initialize
 constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
 
@@ -109,7 +110,7 @@ Measurement lastPublishedMeasurement;
 void setLed(bool on)
 {
     // Active LOW: 0 is ON (Max brightness), 255 is OFF.
-    int duty = on ? (MAX_DUTY - MAX_BRIGHTNESS) : MAX_DUTY;
+    int duty = on ? (MAX_DUTY - currentMaxBrightness) : MAX_DUTY;
     ledcWrite(PWM_CHANNEL, duty);
 }
 
@@ -307,7 +308,7 @@ bool connectToScaleDevice()
         if (pChrMeasurementNotify && pChrMeasurementNotify->canNotify())
         {
             pChrMeasurementNotify->subscribe(true, notifyMeasurement);
-            Serial.println("Subscribed to measurements...");
+            Serial.println("Subscribed to measurements, waiting 12 seconds for notifications...");
         }
     }
 
@@ -371,7 +372,7 @@ void connectToMqtt()
         connectAttempts++;
 
         Serial.println("Attempting MQTT connection...");
-        if (mqttClient.connect("ESP32ScaleClient", MQTT_SERVER_USER, MQTT_SERVER_PASSWORD))
+        if (mqttClient.connect("ESP32ScaleClientX", MQTT_SERVER_USER, MQTT_SERVER_PASSWORD))
         {
             Serial.println("MQTT connected");
         }
@@ -582,6 +583,7 @@ void setLedBlinkDurations(uint16_t onDurationMs, uint16_t offDurationMs)
 void setLedModeBlink(uint16_t onDurationMs = 200, uint16_t offDurationMs = 800)
 {
     currentLedMode = LedMode::PULSE;
+    currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
     setLedBlinkDurations(onDurationMs, offDurationMs);
 }
 
@@ -667,14 +669,14 @@ void loop()
             break;
         }
         setLedBlinkDurations(
-            map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 500, 100),
-            map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 500, 100));
+            map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300),
+            map(millis() - stateTimer, 0, COLLECT_DELAY_MS, 1000, 300));
 
         if (millis() - stateTimer > COLLECT_DELAY_MS)
         {
             if (latestMeasurement.time == lastPublishedMeasurement.time)
             {
-                Serial.println("No new measurements received, restarting scan in 40 seconds...");
+                Serial.println("No new measurements received, restarting scan in 45 seconds...");
                 cleanupBleSession();
                 setLed(false);
                 currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
@@ -727,14 +729,13 @@ void loop()
         currentAppState = AppState::WAITING_FOR_SCALE_TO_DISAPPEAR;
         stateTimer = millis();
         setLedModeBlink(2000, 1000);
+        setLedBlinkDurations(1000, 100);
     }
     break;
 
     case AppState::WAITING_FOR_SCALE_TO_DISAPPEAR:
-        // start slow and then increase blink speed until BT_DISCONNECT_DELAY_MS is reached
-        setLedBlinkDurations(
-            map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, 1000, 100),
-            map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, 1000, 100));
+        currentMaxBrightness = map(millis() - stateTimer, 0, BT_DISCONNECT_DELAY_MS, DEFAULT_MAX_BRIGHTNESS, 0);
+        currentMaxBrightness = constrain(currentMaxBrightness, 0, DEFAULT_MAX_BRIGHTNESS);
 
         if (millis() - stateTimer > BT_DISCONNECT_DELAY_MS)
         {
@@ -755,7 +756,7 @@ void loop()
         float phase = (float)(millis() % period) / period * 2 * PI;
         float val = (1.0f - cos(phase)) / 2.0f;
 
-        int brightness = val * MAX_BRIGHTNESS;
+        int brightness = val * currentMaxBrightness;
         int duty = MAX_DUTY - brightness; // Active LOW
         ledcWrite(PWM_CHANNEL, duty);
     }
