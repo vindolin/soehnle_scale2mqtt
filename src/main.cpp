@@ -11,7 +11,7 @@
 
 constexpr auto BLUE_LED_PIN = 8;
 
-// PWM Configuration
+// LED PWM Configuration
 constexpr int PWM_CHANNEL = 0;
 constexpr int PWM_FREQ = 5000;
 constexpr int PWM_RESOLUTION = 8;
@@ -115,7 +115,6 @@ void logHexPayload(const uint8_t *data, size_t length) {
     }
     Serial.println();
 }
-
 
 void processMeasurementPayload(const uint8_t *data, size_t length) {
     measurementCount++;

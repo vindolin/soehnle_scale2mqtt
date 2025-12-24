@@ -2,8 +2,8 @@
 
 #include <Arduino.h>
 #include <map>
-#include <vector>
 #include <time.h>
+#include <vector>
 
 struct Measurement {
     String time;
@@ -136,8 +136,7 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     }
 
     char timeStr[25];
-    snprintf(timeStr, sizeof(timeStr), "%04u-%02u-%02uT%02u:%02u:%02uZ",
-             year, month, day, hour, minute, second);
+    snprintf(timeStr, sizeof(timeStr), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
 
     outMeasurement = Measurement();
     outMeasurement.pID = userId;
@@ -155,12 +154,7 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
 }
 
 void logAndStoreMeasurement(const Measurement &measurement) {
-    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n",
-                  measurement.pID,
-                  measurement.time.c_str(),
-                  measurement.weight,
-                  measurement.fat,
-                  measurement.water,
+    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n", measurement.pID, measurement.time.c_str(), measurement.weight, measurement.fat, measurement.water,
                   measurement.muscle);
 
     if (latestMeasurement.time.isEmpty() || measurement.time > latestMeasurement.time) {
