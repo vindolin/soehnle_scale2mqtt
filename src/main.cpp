@@ -7,8 +7,6 @@
 #include <time.h>
 
 #include "config.h"
-#include "measurement_utils.h"
-#include "users.h"
 #include "measurement_helpers.h"
 
 constexpr auto BLUE_LED_PIN = 8;
@@ -42,8 +40,6 @@ const char *MEASUREMENT_TIME_TOPIC = "smartscale/measurementTime";
 const char *MEASUREMENT_COUNT_TOPIC = "smartscale/measurementCount";
 
 const char *LOOP_COUNT_TOPIC = "smartscale/loopCount";
-
-Measurement latestMeasurement;
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
