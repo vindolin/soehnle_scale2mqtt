@@ -9,27 +9,7 @@
 #include "config.h"
 #include "measurement_helpers.h"
 
-constexpr auto BLUE_LED_PIN = 8;
-
-// LED PWM Configuration
-constexpr int PWM_CHANNEL = 0;
-constexpr int PWM_FREQ = 5000;
-constexpr int PWM_RESOLUTION = 8;
-constexpr int MAX_DUTY = 255;
-constexpr int DEFAULT_MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
-int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
-
-constexpr auto REQUEST_DELAY_MS = 15000;       // time to wait before requesting history
-constexpr auto BT_DISCONNECT_DELAY_MS = 45000; // time to wait before the next scan when the last measurement
-                                               // didn't change
-// constexpr int SERIAL_STARTUP_DELAY_MS = 4000; // time to wait for Serial to
-// initialize
-constexpr auto SERIAL_STARTUP_DELAY_MS = 1000; // time to wait for Serial to initialize
-
-constexpr size_t MQTT_BUFFER_SIZE = 1024;
-
-const auto GMT_OFFSET_SEC = 3600;
-const auto DAYLIGHT_OFFSET_SEC = 3600;
+const bool DEBUG = true;
 
 const char *MAIN_TOPIC = "smartscale2/";
 
@@ -42,6 +22,25 @@ const char *MEASUREMENT_COUNT_TOPIC = "measurementCount";
 
 const char *LOOP_COUNT_TOPIC = "loopCount";
 
+constexpr auto BLUE_LED_PIN = 8;
+
+// LED PWM Configuration
+constexpr int PWM_CHANNEL = 0;
+constexpr int PWM_FREQ = 5000;
+constexpr int PWM_RESOLUTION = 8;
+constexpr int MAX_DUTY = 255;
+constexpr int DEFAULT_MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
+int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
+
+constexpr auto BT_DISCONNECT_DELAY_MS = 35000; // time to wait before the next scan when the last measurement didn't change
+constexpr auto SERIAL_STARTUP_DELAY_MS = 2000; // time to wait for Serial to initialize
+constexpr auto WAIT_FOR_PUBLISH_DELAY_MS = 1000; // time to wait after publishing before disconnecting MQTT
+
+constexpr size_t MQTT_BUFFER_SIZE = 1024;
+
+const auto GMT_OFFSET_SEC = 3600;
+const auto DAYLIGHT_OFFSET_SEC = 3600;
+
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
@@ -51,6 +50,7 @@ enum class AppState {
     CONNECTED_WAIT,
     WAIT_FOR_MEASUREMENT,
     PUBLISH_MEASUREMENT,
+    WAIT_FOR_PUBLISH,
     WAIT_FOR_SCALE_TO_DISAPPEAR
 };
 
@@ -75,9 +75,9 @@ unsigned long lastBlinkToggle = 0;
 
 NimBLEClient *pClient = nullptr;
 
-const char *SCALE_DEVICE_NAME = "Shape100";
+const char *SCALE_DEVICE_NAME = "Shape100"; // The name of the scale device we are looking for
 
-// --- UUIDs ---
+// Service and Characteristic UUIDs
 static NimBLEUUID SVC_BATTERY("180f");
 static NimBLEUUID CHR_BATTERY_LEVEL("2a19");
 
@@ -90,8 +90,6 @@ static NimBLEUUID CHR_BODY_COMPOSITION_MEASUREMENT("00002a9c-0000-1000-8000-0080
 NimBLEAdvertisedDevice *scaleDevice = nullptr;
 
 uint8_t batteryLevel = 0;
-
-Measurement lastPublishedMeasurement;
 
 String measurementJson;
 
@@ -127,6 +125,7 @@ void processMeasurementPayload(const uint8_t *data, size_t length) {
 
     if (buildMeasurementFromBodyCompositionFrame(data, length, measurement)) {
         storeMeasurement(measurement);
+        if(DEBUG) Serial.println("State -> PUBLISH_MEASUREMENT");
         currentAppState = AppState::PUBLISH_MEASUREMENT;
         return;
     }
@@ -146,7 +145,6 @@ bool connectToScaleDevice() {
     pClient = NimBLEDevice::createClient();
 
     if (!pClient->connect(scaleDevice)) {
-        Serial.println("Failed to connect");
         NimBLEDevice::deleteClient(pClient);
         pClient = nullptr;
         return false;
@@ -360,7 +358,7 @@ void checkRestart() {
 }
 
 bool generateMeasurementJson(String &outJson) {
-    if (latestMeasurement.time.isEmpty()) {
+    if (latestMeasurement.time[0] == '\0') {
         return false;
     }
     DynamicJsonDocument doc(256);
@@ -408,8 +406,6 @@ void setup() {
 
     NimBLEDevice::init("ESP32_SCALE");
     NimBLEDevice::setPower(ESP_PWR_LVL_P21); // max power
-    NimBLEDevice::setSecurityAuth(true, true, true);
-    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 }
 
 void setLedBlinkDurations(uint16_t onDurationMs, uint16_t offDurationMs) {
@@ -434,6 +430,7 @@ void loop() {
     switch (currentAppState) {
         case AppState::SCANNING:
             if (scaleDevice != nullptr) {
+                if(DEBUG) Serial.println("State -> CONNECTING");
                 currentAppState = AppState::CONNECTING;
             } else {
                 NimBLEScan *pScan = NimBLEDevice::getScan();
@@ -452,27 +449,15 @@ void loop() {
             latestMeasurement = Measurement(); // Clear previous measurement
             if (connectToScaleDevice()) {
                 setLedModeBlink(100, 100);
-                currentAppState = AppState::CONNECTED_WAIT;
-                stateTimer = millis();
+
+                currentAppState = AppState::WAIT_FOR_MEASUREMENT;
+                if(DEBUG) Serial.println("State -> WAIT_FOR_MEASUREMENT");
             } else {
                 Serial.println("Failed to connect, restarting scan...");
-                if (scaleDevice != nullptr) {
-                    delete scaleDevice;
-                    scaleDevice = nullptr;
-                }
-                currentAppState = AppState::SCANNING;
-            }
-            break;
-
-        case AppState::CONNECTED_WAIT:
-            if (!pClient || !pClient->isConnected()) {
-                Serial.println("Lost connection during wait!");
                 cleanupBleSession();
+
                 currentAppState = AppState::SCANNING;
-                break;
-            }
-            if (millis() - stateTimer > REQUEST_DELAY_MS) {
-                currentAppState = AppState::WAIT_FOR_MEASUREMENT;
+                if(DEBUG) Serial.println("State -> SCANNING");
             }
             break;
 
@@ -480,13 +465,15 @@ void loop() {
             if (!pClient || !pClient->isConnected()) {
                 Serial.println("Lost connection while waiting for measurement!");
                 cleanupBleSession();
+
                 currentAppState = AppState::SCANNING;
-                break;
+                if(DEBUG) Serial.println("State -> SCANNING");
             }
             break;
 
         case AppState::PUBLISH_MEASUREMENT:
             disconnectFromScaleDevice();
+            cleanupBleSession();
 
             connectToWifi();
             connectToMqtt();
@@ -498,37 +485,41 @@ void loop() {
             mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str(), true);
             mqttClient.publish(LOOP_COUNT_TOPIC, String(loopCount).c_str(), true);
 
-            // Publish measurement
-            {
-                if (generateMeasurementJson(measurementJson)) {
-                    char topic[64];
+            if (generateMeasurementJson(measurementJson)) {
+                char topic[64];
 
-                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TOPIC);
-                    mqttClient.publish(topic, measurementJson.c_str(), true);
+                snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TOPIC);
+                mqttClient.publish(topic, measurementJson.c_str(), true);
 
-                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TIME_TOPIC);
-                    mqttClient.publish(topic, buildCurrentTimeString().c_str(), true);
+                snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TIME_TOPIC);
+                mqttClient.publish(topic, buildCurrentTimeString().c_str(), true);
 
-                    char countStr[12];
-                    snprintf(countStr, sizeof(countStr), "%d", measurementCount);
-                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_COUNT_TOPIC);
-                    mqttClient.publish(topic, countStr, true);
+                char countStr[12];
+                snprintf(countStr, sizeof(countStr), "%d", measurementCount);
+                snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_COUNT_TOPIC);
+                mqttClient.publish(topic, countStr, true);
 
-                    Serial.printf("Published measurement: %s\n", measurementJson.c_str());
-                } else {
-                    Serial.println("No valid measurement to publish");
-                }
+                Serial.printf("Published measurement: %s\n", measurementJson.c_str());
+            } else {
+                Serial.println("No valid measurement to publish");
             }
 
             mqttClient.loop();
-            delay(1000); // wait for publishes
-
-            disconnectFromMqtt();
-
-            lastPublishedMeasurement = latestMeasurement;
 
             stateTimer = millis();
-            currentAppState = AppState::WAIT_FOR_SCALE_TO_DISAPPEAR;
+            currentAppState = AppState::WAIT_FOR_PUBLISH;
+            if(DEBUG) Serial.println("State -> WAIT_FOR_PUBLISH");
+            break;
+
+        case AppState::WAIT_FOR_PUBLISH:
+            if (millis() - stateTimer > WAIT_FOR_PUBLISH_DELAY_MS) {
+                disconnectFromMqtt();
+                Serial.println("Waiting for scale to disappear...");
+
+                stateTimer = millis();
+                currentAppState = AppState::WAIT_FOR_SCALE_TO_DISAPPEAR;
+                if(DEBUG) Serial.println("State -> WAIT_FOR_SCALE_TO_DISAPPEAR");
+            }
             break;
 
         case AppState::WAIT_FOR_SCALE_TO_DISAPPEAR:
@@ -536,7 +527,10 @@ void loop() {
             currentMaxBrightness = constrain(currentMaxBrightness, 0, DEFAULT_MAX_BRIGHTNESS);
 
             if (millis() - stateTimer > BT_DISCONNECT_DELAY_MS) {
+
+                stateTimer = millis();
                 currentAppState = AppState::SCANNING;
+                if(DEBUG) Serial.println("State -> SCANNING");
             }
             break;
 

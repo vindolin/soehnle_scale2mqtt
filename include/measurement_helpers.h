@@ -1,12 +1,9 @@
 #pragma once
 
 #include <Arduino.h>
-#include <map>
-#include <time.h>
-#include <vector>
 
 struct Measurement {
-    String time;
+    char time[25] = "";
     uint8_t pID = 0;
     float weight = 0.0;
     float fat = 0.0;
@@ -140,12 +137,9 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         hasWeight = true;
     }
 
-    char timeStr[25];
-    snprintf(timeStr, sizeof(timeStr), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
+    snprintf(outMeasurement.time, sizeof(outMeasurement.time), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
 
-    outMeasurement = Measurement();
     outMeasurement.pID = userId;
-    outMeasurement.time = timeStr;
     outMeasurement.weight = hasWeight ? weightKg : 0.0f;
     outMeasurement.fat = bodyFatPercent;
     outMeasurement.muscle = hasMusclePercent ? musclePercent : 0.0f;
@@ -159,10 +153,10 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
 }
 
 void storeMeasurement(const Measurement &measurement) {
-    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n", measurement.pID, measurement.time.c_str(), measurement.weight, measurement.fat, measurement.water,
+    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n", measurement.pID, measurement.time, measurement.weight, measurement.fat, measurement.water,
                   measurement.muscle);
 
-    if (latestMeasurement.time.isEmpty() || measurement.time > latestMeasurement.time) {
+    if (latestMeasurement.time[0] == '\0' || strcmp(measurement.time, latestMeasurement.time) > 0) {
         latestMeasurement = measurement;
     }
 }
