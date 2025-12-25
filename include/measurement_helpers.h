@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 
 struct Measurement {
     char time[25] = "";
@@ -149,6 +150,22 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         outMeasurement.water = 0.0f;
     }
 
+    return true;
+}
+
+bool generateMeasurementJson(String &outJson) {
+    if (latestMeasurement.time[0] == '\0') {
+        return false;
+    }
+    DynamicJsonDocument doc(256);
+
+    doc["p_id"] = latestMeasurement.pID;
+    doc["time"] = latestMeasurement.time;
+    doc["weight"] = round(latestMeasurement.weight * 10.0) / 10.0;
+    doc["fat"] = round(latestMeasurement.fat * 10.0) / 10.0;
+    doc["water"] = round(latestMeasurement.water * 10.0) / 10.0;
+    doc["muscle"] = round(latestMeasurement.muscle * 10.0) / 10.0;
+    serializeJson(doc, outJson);
     return true;
 }
 

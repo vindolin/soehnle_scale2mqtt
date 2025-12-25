@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 #include <NimBLEScan.h>
 #include <PubSubClient.h>
@@ -35,6 +34,7 @@ int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
 constexpr auto BT_DISCONNECT_DELAY_MS = 35000; // time to wait before the next scan when the last measurement didn't change
 constexpr auto SERIAL_STARTUP_DELAY_MS = 2000; // time to wait for Serial to initialize
 constexpr auto WAIT_FOR_PUBLISH_DELAY_MS = 1000; // time to wait after publishing before disconnecting MQTT
+constexpr auto WAIT_FOR_MEASUREMENT_TIMEOUT_MS = 30000; // time to wait for measurement indication before disconnecting
 
 constexpr size_t MQTT_BUFFER_SIZE = 1024;
 
@@ -90,8 +90,10 @@ static NimBLEUUID CHR_BODY_COMPOSITION_MEASUREMENT("00002a9c-0000-1000-8000-0080
 NimBLEAdvertisedDevice *scaleDevice = nullptr;
 
 uint8_t batteryLevel = 0;
-
+Measurement measurementFrame;
 String measurementJson;
+uint16_t measurementCount = 0;
+uint32_t loopCount = 0;
 
 void setLed(bool on) {
     // Active LOW: 0 is ON (Max brightness), 255 is OFF.
@@ -107,9 +109,6 @@ void toggleLed() {
     setLed(ledState);
 }
 
-uint16_t measurementCount = 0;
-uint32_t loopCount = 0;
-
 void logHexPayload(const uint8_t *data, size_t length) {
     Serial.print("Received measurement data: ");
     for (size_t i = 0; i < length; i++) {
@@ -118,25 +117,20 @@ void logHexPayload(const uint8_t *data, size_t length) {
     Serial.println();
 }
 
-void processMeasurementPayload(const uint8_t *data, size_t length) {
+void indicateBodyComposition(NimBLERemoteCharacteristic *remoteCharacteristic, uint8_t *data, size_t length, bool isNotify) {
+    Serial.println("Body Composition indication received:");
+    logHexPayload(data, length);
+
     measurementCount++;
 
-    Measurement measurement;
-
-    if (buildMeasurementFromBodyCompositionFrame(data, length, measurement)) {
-        storeMeasurement(measurement);
+    if (buildMeasurementFromBodyCompositionFrame(data, length, measurementFrame)) {
+        storeMeasurement(measurementFrame);
         if(DEBUG) Serial.println("State -> PUBLISH_MEASUREMENT");
         currentAppState = AppState::PUBLISH_MEASUREMENT;
         return;
     }
 
     Serial.println("Skipping measurement payload: unsupported format");
-}
-
-void indicateBodyComposition(NimBLERemoteCharacteristic *pRemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify) {
-    Serial.println("Body Composition indication received:");
-    logHexPayload(pData, length);
-    processMeasurementPayload(pData, length);
 }
 
 bool connectToScaleDevice() {
@@ -357,22 +351,6 @@ void checkRestart() {
     }
 }
 
-bool generateMeasurementJson(String &outJson) {
-    if (latestMeasurement.time[0] == '\0') {
-        return false;
-    }
-    DynamicJsonDocument doc(256);
-
-    doc["p_id"] = latestMeasurement.pID;
-    doc["time"] = latestMeasurement.time;
-    doc["weight"] = round(latestMeasurement.weight * 10.0) / 10.0;
-    doc["fat"] = round(latestMeasurement.fat * 10.0) / 10.0;
-    doc["water"] = round(latestMeasurement.water * 10.0) / 10.0;
-    doc["muscle"] = round(latestMeasurement.muscle * 10.0) / 10.0;
-    serializeJson(doc, outJson);
-    return true;
-}
-
 void cleanupBleSession() {
     if (pClient != nullptr) {
         if (pClient->isConnected()) {
@@ -450,6 +428,7 @@ void loop() {
             if (connectToScaleDevice()) {
                 setLedModeBlink(100, 100);
 
+                stateTimer = millis(); // reset timer for the next delayed state
                 currentAppState = AppState::WAIT_FOR_MEASUREMENT;
                 if(DEBUG) Serial.println("State -> WAIT_FOR_MEASUREMENT");
             } else {
@@ -462,7 +441,17 @@ void loop() {
             break;
 
         case AppState::WAIT_FOR_MEASUREMENT:
-            if (!pClient || !pClient->isConnected()) {
+            if (millis() - stateTimer > WAIT_FOR_MEASUREMENT_TIMEOUT_MS) {
+                Serial.println("Measurement timeout, disconnecting...");
+
+                disconnectFromScaleDevice();
+                cleanupBleSession();
+
+                stateTimer = millis();
+                currentAppState = AppState::WAIT_FOR_SCALE_TO_DISAPPEAR;
+                if(DEBUG) Serial.println("State -> WAIT_FOR_SCALE_TO_DISAPPEAR");
+
+            } else if (!pClient || !pClient->isConnected()) {
                 Serial.println("Lost connection while waiting for measurement!");
                 cleanupBleSession();
 
