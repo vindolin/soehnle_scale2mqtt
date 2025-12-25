@@ -45,12 +45,22 @@ const char *LOOP_COUNT_TOPIC = "loopCount";
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-enum class AppState { SCANNING, CONNECTING, CONNECTED_WAIT, WAIT_FOR_MEASUREMENT, PUBLISH_MEASUREMENT, WAIT_FOR_SCALE_TO_DISAPPEAR };
+enum class AppState {
+    SCANNING,
+    CONNECTING,
+    CONNECTED_WAIT,
+    WAIT_FOR_MEASUREMENT,
+    PUBLISH_MEASUREMENT,
+    WAIT_FOR_SCALE_TO_DISAPPEAR
+};
 
 AppState currentAppState = AppState::SCANNING;
 unsigned long stateTimer = 0;
 
-enum class BlinkState { OFF, ON };
+enum class BlinkState {
+    OFF,
+    ON
+};
 
 enum class LedMode {
     PULSE,
@@ -82,6 +92,8 @@ NimBLEAdvertisedDevice *scaleDevice = nullptr;
 uint8_t batteryLevel = 0;
 
 Measurement lastPublishedMeasurement;
+
+String measurementJson;
 
 void setLed(bool on) {
     // Active LOW: 0 is ON (Max brightness), 255 is OFF.
@@ -488,14 +500,19 @@ void loop() {
 
             // Publish measurement
             {
-                String measurementJson;
                 if (generateMeasurementJson(measurementJson)) {
-                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TOPIC).c_str(), measurementJson.c_str(), true);
-                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_TIME_TOPIC).c_str(), buildCurrentTimeString().c_str(), true);
+                    char topic[64];
+
+                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TOPIC);
+                    mqttClient.publish(topic, measurementJson.c_str(), true);
+
+                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TIME_TOPIC);
+                    mqttClient.publish(topic, buildCurrentTimeString().c_str(), true);
 
                     char countStr[12];
                     snprintf(countStr, sizeof(countStr), "%d", measurementCount);
-                    mqttClient.publish((String(MAIN_TOPIC) + MEASUREMENT_COUNT_TOPIC).c_str(), countStr, true);
+                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_COUNT_TOPIC);
+                    mqttClient.publish(topic, countStr, true);
 
                     Serial.printf("Published measurement: %s\n", measurementJson.c_str());
                 } else {
