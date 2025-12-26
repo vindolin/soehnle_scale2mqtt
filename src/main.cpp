@@ -10,7 +10,7 @@
 
 const bool DEBUG = true;
 
-const char *MAIN_TOPIC = "smartscale3/";
+const char *MAIN_TOPIC = "smartscale/";
 
 const char *BOOT_TIME_TOPIC = "bootTime";
 const char *BATTERY_LEVEL_TOPIC = "battery";
