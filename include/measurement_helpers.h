@@ -29,12 +29,7 @@ float decodeMassKg(uint16_t raw) {
         return 0.0f;
     }
 
-    float kg = raw * 0.005f;
-    if (kg < 10.0f) {
-        // Soehnle appears to use 0.1 kg resolution despite the spec stating
-        // 0.005 kg.
-        kg = raw * 0.1f;
-    }
+    float kg = raw * 0.1f;
     return kg;
 }
 

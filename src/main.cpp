@@ -32,7 +32,7 @@ constexpr int DEFAULT_MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
 
 int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
 
-constexpr auto BT_DISCONNECT_DELAY_MS = 45000; // time it takes for the scale to power down after the user steps off
+constexpr auto BT_DISCONNECT_DELAY_MS = 55000; // time it takes for the scale to power down after the user steps off
 constexpr auto SERIAL_STARTUP_DELAY_MS = 2000; // time to wait for Serial to initialize
 constexpr auto WAIT_FOR_PUBLISH_DELAY_MS = 1000; // time to wait after publishing before disconnecting MQTT
 constexpr auto WAIT_FOR_MEASUREMENT_TIMEOUT_MS = 30000; // time to wait for measurement indication before disconnecting
