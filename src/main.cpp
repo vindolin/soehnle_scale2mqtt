@@ -419,6 +419,7 @@ void loop() {
             } else {
                 NimBLEScan *pScan = NimBLEDevice::getScan();
                 if (!pScan->isScanning()) {
+                    currentMaxBrightness = 0.3;
                     setLedModeBlink(1000, 3000);
                     startScan();
                 }
@@ -431,10 +432,11 @@ void loop() {
             setLedModeBlink(50, 100);
 
             if (connectToScaleDevice()) {
-                setLedModeBlink(100, 100);
-
+                currentMaxBrightness = 1.0;
+                setLedModeBlink(500, 500);
                 stateTimer = millis(); // reset timer for the next delayed state
                 currentAppState = AppState::WAIT_FOR_MEASUREMENT;
+                Serial.println("Waiting for measurement or timeout(30sec)...");
                 if(DEBUG) Serial.println("State -> WAIT_FOR_MEASUREMENT");
             } else {
                 Serial.println("Failed to connect, restarting scan...");
