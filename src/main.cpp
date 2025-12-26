@@ -123,15 +123,30 @@ void logHexPayload(const uint8_t *data, size_t length) {
     Serial.println();
 }
 
-void indicateBodyComposition(NimBLERemoteCharacteristic *remoteCharacteristic, uint8_t *data, size_t length, bool isNotify) {
+bool generateMeasurementJson(String &outJson) {
+    if (measurement.time[0] == '\0') {
+        return false;
+    }
+    DynamicJsonDocument doc(256);
+
+    doc["p_id"] = measurement.pID;
+    doc["time"] = measurement.time;
+    doc["weight"] = round(measurement.weightKg * 10.0) / 10.0;
+    doc["fat"] = round(measurement.fatPercentage * 10.0) / 10.0;
+    doc["water"] = round(measurement.waterPercentage * 10.0) / 10.0;
+    doc["muscle"] = round(measurement.musclePercentage * 10.0) / 10.0;
+    serializeJson(doc, outJson);
+    return true;
+}
+
+void indicateBodyComposition(NimBLERemoteCharacteristic *remoteCharacteristic, uint8_t *rawData, size_t length, bool isNotify) {
     Serial.println("Body Composition indication received:");
-    logHexPayload(data, length);
+    logHexPayload(rawData, length);
 
     measurementCount++;
-    Measurement measurementFrame;
 
-    if (buildMeasurementFromBodyCompositionFrame(data, length, measurementFrame)) {
-        storeMeasurement(measurementFrame);
+    if (buildMeasurementFromBodyCompositionFrame(rawData, length)) {
+        storeMeasurement();
         if(DEBUG) Serial.println("State -> PUBLISH_MEASUREMENT");
         currentAppState = AppState::PUBLISH_MEASUREMENT;
         return;

@@ -6,13 +6,13 @@
 struct Measurement {
     char time[25] = "";
     uint8_t pID = 0;
-    float weight = 0.0;
-    float fat = 0.0;
-    float water = 0.0;
-    float muscle = 0.0;
+    float weightKg = 0.0;
+    float fatPercentage = 0.0;
+    float waterPercentage = 0.0;
+    float musclePercentage = 0.0;
 };
 
-Measurement latestMeasurement;
+Measurement measurement;
 
 constexpr auto MEASUREMENT_OPCODE = 0x09;
 constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
@@ -38,7 +38,7 @@ float decodeMassKg(uint16_t raw) {
     return kg;
 }
 
-bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length, Measurement &outMeasurement) {
+bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length) {
     if (length < 4) {
         return false;
     }
@@ -138,42 +138,22 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         hasWeight = true;
     }
 
-    snprintf(outMeasurement.time, sizeof(outMeasurement.time), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
+    snprintf(measurement.time, sizeof(measurement.time), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
 
-    outMeasurement.pID = userId;
-    outMeasurement.weight = hasWeight ? weightKg : 0.0f;
-    outMeasurement.fat = bodyFatPercent;
-    outMeasurement.muscle = hasMusclePercent ? musclePercent : 0.0f;
+    measurement.pID = userId;
+    measurement.weightKg = hasWeight ? weightKg : 0.0f;
+    measurement.fatPercentage = bodyFatPercent;
+    measurement.musclePercentage = hasMusclePercent ? musclePercent : 0.0f;
     if (hasBodyWaterMass && hasWeight && weightKg > 0.0f) {
-        outMeasurement.water = (bodyWaterMassKg / weightKg) * 100.0f;
+        measurement.waterPercentage = (bodyWaterMassKg / weightKg) * 100.0f;
     } else {
-        outMeasurement.water = 0.0f;
+        measurement.waterPercentage = 0.0f;
     }
 
     return true;
 }
 
-bool generateMeasurementJson(String &outJson) {
-    if (latestMeasurement.time[0] == '\0') {
-        return false;
-    }
-    DynamicJsonDocument doc(256);
-
-    doc["p_id"] = latestMeasurement.pID;
-    doc["time"] = latestMeasurement.time;
-    doc["weight"] = round(latestMeasurement.weight * 10.0) / 10.0;
-    doc["fat"] = round(latestMeasurement.fat * 10.0) / 10.0;
-    doc["water"] = round(latestMeasurement.water * 10.0) / 10.0;
-    doc["muscle"] = round(latestMeasurement.muscle * 10.0) / 10.0;
-    serializeJson(doc, outJson);
-    return true;
-}
-
-void storeMeasurement(const Measurement &measurement) {
-    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n", measurement.pID, measurement.time, measurement.weight, measurement.fat, measurement.water,
-                  measurement.muscle);
-
-    if (latestMeasurement.time[0] == '\0' || strcmp(measurement.time, latestMeasurement.time) > 0) {
-        latestMeasurement = measurement;
-    }
+void storeMeasurement() {
+    Serial.printf("personID %d - %s: weight:%4.1fkg, fat:%4.1f%%, water:%4.1f%%, muscle:%4.1f%%\n", measurement.pID, measurement.time, measurement.weightKg, measurement.fatPercentage, measurement.waterPercentage,
+                  measurement.musclePercentage);
 }
