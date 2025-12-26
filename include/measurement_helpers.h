@@ -14,16 +14,6 @@ struct Measurement {
 
 Measurement measurement;
 
-constexpr auto MEASUREMENT_OPCODE = 0x09;
-constexpr auto MEASUREMENT_FRAME_LENGTH = 15;
-
-constexpr uint16_t BODY_COMP_FLAG_TIMESTAMP_PRESENT = 0x0002;
-constexpr uint16_t BODY_COMP_FLAG_USER_ID_PRESENT = 0x0004;
-constexpr uint16_t BODY_COMP_FLAG_BASAL_METABOLISM_PRESENT = 0x0008;
-constexpr uint16_t BODY_COMP_FLAG_MUSCLE_PERCENT = 0x0010;
-constexpr uint16_t BODY_COMP_FLAG_BODY_WATER_MASS = 0x0100;
-constexpr uint16_t BODY_COMP_FLAG_WEIGHT = 0x0400;
-
 float decodeMassKg(uint16_t raw) {
     if (raw == 0) {
         return 0.0f;
@@ -34,11 +24,8 @@ float decodeMassKg(uint16_t raw) {
 }
 
 bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length) {
-    if (length < 4) {
-        return false;
-    }
-
     size_t offset = 0;
+
     auto readUInt16 = [&](uint16_t &value) -> bool {
         if (offset + 2 > length) {
             Serial.println("Body composition payload truncated (uint16)");
@@ -52,11 +39,12 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     const uint16_t flags = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
     offset += 2;
 
-    uint16_t bodyFatRaw = 0;
-    if (!readUInt16(bodyFatRaw)) {
+    uint16_t raw = 0;
+
+    if (!readUInt16(raw)) {
         return false;
     }
-    float bodyFatPercent = bodyFatRaw / 10.0f;
+    measurement.fatPercentage = raw / 10.0f;
 
     uint16_t year = 0;
     uint8_t month = 1;
@@ -65,82 +53,60 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     uint8_t minute = 0;
     uint8_t second = 0;
 
-    if (flags & BODY_COMP_FLAG_TIMESTAMP_PRESENT) {
-        if (offset + 7 > length) {
-            Serial.println("Body composition payload truncated (timestamp)");
-            return false;
-        }
-        year = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-        month = data[offset + 2];
-        day = data[offset + 3];
-        hour = data[offset + 4];
-        minute = data[offset + 5];
-        second = data[offset + 6];
-        offset += 7;
+    if (offset + 7 > length) {
+        Serial.println("Body composition payload truncated (timestamp)");
+        return false;
     }
+    year = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+    month = data[offset + 2];
+    day = data[offset + 3];
+    hour = data[offset + 4];
+    minute = data[offset + 5];
+    second = data[offset + 6];
+    offset += 7;
 
-    uint8_t userId = 0xFF;
-    if (flags & BODY_COMP_FLAG_USER_ID_PRESENT) {
-        if (offset >= length) {
-            Serial.println("Body composition payload truncated (user id)");
-            return false;
-        }
-        userId = data[offset++];
+    measurement.pID = 0xFF;
+    if (offset >= length) {
+        Serial.println("Body composition payload truncated (user id)");
+        return false;
     }
+    measurement.pID = data[offset++];
 
-    if (userId == 0xFF) {
+    if (measurement.pID == 0xFF) {
         Serial.println("Body composition payload missing user id");
         return false;
     }
 
-    if (flags & BODY_COMP_FLAG_BASAL_METABOLISM_PRESENT) {
-        uint16_t raw = 0;
-        if (!readUInt16(raw)) {
-            return false;
-        }
+    // skip basal metabolism
+    if (!readUInt16(raw)) {
+        return false;
     }
 
-    float musclePercent = 0.0f;
-    bool hasMusclePercent = false;
-    if (flags & BODY_COMP_FLAG_MUSCLE_PERCENT) {
-        uint16_t raw = 0;
-        if (!readUInt16(raw)) {
-            return false;
-        }
-        musclePercent = raw / 10.0f;
-        hasMusclePercent = true;
+    measurement.musclePercentage = 0.0f;
+    raw = 0;
+    if (!readUInt16(raw)) {
+        return false;
     }
+    measurement.musclePercentage = raw / 10.0f;
 
     float bodyWaterMassKg = 0.0f;
-    bool hasBodyWaterMass = false;
-    if (flags & BODY_COMP_FLAG_BODY_WATER_MASS) {
-        uint16_t raw = 0;
-        if (!readUInt16(raw)) {
-            return false;
-        }
-        bodyWaterMassKg = decodeMassKg(raw);
-        hasBodyWaterMass = true;
+    raw = 0;
+    if (!readUInt16(raw)) {
+        return false;
     }
+    bodyWaterMassKg = decodeMassKg(raw);
 
-    float weightKg = 0.0f;
-    bool hasWeight = false;
-    if (flags & BODY_COMP_FLAG_WEIGHT) {
-        uint16_t raw = 0;
-        if (!readUInt16(raw)) {
-            return false;
-        }
-        weightKg = decodeMassKg(raw);
-        hasWeight = true;
+    measurement.weightKg = 0.0f;
+    raw = 0;
+    if (!readUInt16(raw)) {
+        return false;
     }
+    measurement.weightKg = decodeMassKg(raw);
 
     snprintf(measurement.time, sizeof(measurement.time), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
 
-    measurement.pID = userId;
-    measurement.weightKg = hasWeight ? weightKg : 0.0f;
-    measurement.fatPercentage = bodyFatPercent;
-    measurement.musclePercentage = hasMusclePercent ? musclePercent : 0.0f;
-    if (hasBodyWaterMass && hasWeight && weightKg > 0.0f) {
-        measurement.waterPercentage = (bodyWaterMassKg / weightKg) * 100.0f;
+    if (measurement.weightKg > 0.0f) {
+        measurement.waterPercentage = (bodyWaterMassKg / measurement.weightKg) * 100.0f;
     } else {
         measurement.waterPercentage = 0.0f;
     }
