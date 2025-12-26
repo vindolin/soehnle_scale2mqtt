@@ -10,7 +10,7 @@
 
 const bool DEBUG = true;
 
-const char *MAIN_TOPIC = "smartscale2/";
+const char *MAIN_TOPIC = "smartscale/";
 
 const char *BOOT_TIME_TOPIC = "bootTime";
 const char *BATTERY_LEVEL_TOPIC = "battery";
@@ -29,9 +29,10 @@ constexpr int PWM_FREQ = 5000;
 constexpr int PWM_RESOLUTION = 8;
 constexpr int MAX_DUTY = 255;
 constexpr int DEFAULT_MAX_BRIGHTNESS = (MAX_DUTY * 0.3); // 30% brightness
+
 int currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
 
-constexpr auto BT_DISCONNECT_DELAY_MS = 35000; // time to wait before the next scan when the last measurement didn't change
+constexpr auto BT_DISCONNECT_DELAY_MS = 40000; // time to wait before the next scan when the last measurement didn't change
 constexpr auto SERIAL_STARTUP_DELAY_MS = 2000; // time to wait for Serial to initialize
 constexpr auto WAIT_FOR_PUBLISH_DELAY_MS = 1000; // time to wait after publishing before disconnecting MQTT
 constexpr auto WAIT_FOR_MEASUREMENT_TIMEOUT_MS = 30000; // time to wait for measurement indication before disconnecting
@@ -90,8 +91,6 @@ static NimBLEUUID CHR_BODY_COMPOSITION_MEASUREMENT("00002a9c-0000-1000-8000-0080
 NimBLEAdvertisedDevice *scaleDevice = nullptr;
 
 uint8_t batteryLevel = 0;
-Measurement measurementFrame;
-String measurementJson;
 uint16_t measurementCount = 0;
 uint32_t loopCount = 0;
 
@@ -103,10 +102,17 @@ void setLed(bool on) {
 
 bool ledState = false;
 
-void toggleLed() {
-    // static bool ledState = false;
-    ledState = !ledState;
-    setLed(ledState);
+void setLedModeBlink(uint16_t onDurationMs = 200, uint16_t offDurationMs = 800) {
+    currentLedMode = LedMode::PULSE;
+    currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
+
+    blinkOnDurationMs = onDurationMs;
+    blinkOffDurationMs = offDurationMs;
+}
+
+void setLedModeOff() {
+    currentLedMode = LedMode::OFF;
+    setLed(false);
 }
 
 void logHexPayload(const uint8_t *data, size_t length) {
@@ -122,6 +128,7 @@ void indicateBodyComposition(NimBLERemoteCharacteristic *remoteCharacteristic, u
     logHexPayload(data, length);
 
     measurementCount++;
+    Measurement measurementFrame;
 
     if (buildMeasurementFromBodyCompositionFrame(data, length, measurementFrame)) {
         storeMeasurement(measurementFrame);
@@ -386,22 +393,6 @@ void setup() {
     NimBLEDevice::setPower(ESP_PWR_LVL_P21); // max power
 }
 
-void setLedBlinkDurations(uint16_t onDurationMs, uint16_t offDurationMs) {
-    blinkOnDurationMs = onDurationMs;
-    blinkOffDurationMs = offDurationMs;
-}
-
-void setLedModeBlink(uint16_t onDurationMs = 200, uint16_t offDurationMs = 800) {
-    currentLedMode = LedMode::PULSE;
-    currentMaxBrightness = DEFAULT_MAX_BRIGHTNESS;
-    setLedBlinkDurations(onDurationMs, offDurationMs);
-}
-
-void setLedModeOff() {
-    currentLedMode = LedMode::OFF;
-    setLed(false);
-}
-
 void loop() {
     checkRestart();
 
@@ -413,7 +404,7 @@ void loop() {
             } else {
                 NimBLEScan *pScan = NimBLEDevice::getScan();
                 if (!pScan->isScanning()) {
-                    setLedModeBlink(100, 2000);
+                    setLedModeBlink(1000, 3000);
                     startScan();
                 }
             }
@@ -473,27 +464,29 @@ void loop() {
             mqttClient.publish((String(MAIN_TOPIC) + BATTERY_LEVEL_TOPIC).c_str(), batteryStr, true);
             mqttClient.publish(MEASUREMENT_COUNT_TOPIC, String(measurementCount).c_str(), true);
             mqttClient.publish(LOOP_COUNT_TOPIC, String(loopCount).c_str(), true);
+            {
+                String measurementJson;
+                if (generateMeasurementJson(measurementJson)) {
+                    char topic[64];
 
-            if (generateMeasurementJson(measurementJson)) {
-                char topic[64];
+                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TOPIC);
+                    mqttClient.publish(topic, measurementJson.c_str(), true);
 
-                snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TOPIC);
-                mqttClient.publish(topic, measurementJson.c_str(), true);
+                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TIME_TOPIC);
+                    mqttClient.publish(topic, buildCurrentTimeString().c_str(), true);
 
-                snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_TIME_TOPIC);
-                mqttClient.publish(topic, buildCurrentTimeString().c_str(), true);
+                    char countStr[12];
+                    snprintf(countStr, sizeof(countStr), "%d", measurementCount);
+                    snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_COUNT_TOPIC);
+                    mqttClient.publish(topic, countStr, true);
 
-                char countStr[12];
-                snprintf(countStr, sizeof(countStr), "%d", measurementCount);
-                snprintf(topic, sizeof(topic), "%s%s", MAIN_TOPIC, MEASUREMENT_COUNT_TOPIC);
-                mqttClient.publish(topic, countStr, true);
-
-                Serial.printf("Published measurement: %s\n", measurementJson.c_str());
-            } else {
-                Serial.println("No valid measurement to publish");
+                    Serial.printf("Published measurement: %s\n", measurementJson.c_str());
+                } else {
+                    Serial.println("No valid measurement to publish");
+                }
             }
 
-            mqttClient.loop();
+            mqttClient.loop();  // process MQTT
 
             stateTimer = millis();
             currentAppState = AppState::WAIT_FOR_PUBLISH;
