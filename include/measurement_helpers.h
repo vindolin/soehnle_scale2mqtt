@@ -23,9 +23,20 @@ float decodeMassKg(uint16_t raw) {
     return kg;
 }
 
+// the data comes in the form: "1e050000e9070c1a12261e020000000000004b03"
+// which is hex-encoded bytes
+// the first two bytes are flags
+// next two bytes are fat percentage (uint16_t, in tenths of percent)
+// next 7 bytes are timestamp (year uint16_t, month uint8_t, day
+
 bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length) {
+    if (length < 4) {
+        return false;
+    }
+
     size_t offset = 0;
 
+    // read the next two bytes as uint16_t and advance offset
     auto readUInt16 = [&](uint16_t &value) -> bool {
         if (offset + 2 > length) {
             Serial.println("Body composition payload truncated (uint16)");
@@ -36,34 +47,41 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         return true;
     };
 
-    const uint16_t flags = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-    offset += 2;
+    uint16_t twoByte = 0;
 
-    uint16_t raw = 0;
-
-    if (!readUInt16(raw)) {
+    // skip flags
+    if (!readUInt16(twoByte)) {
         return false;
     }
-    measurement.fatPercentage = raw / 10.0f;
 
-    uint16_t year = 0;
-    uint8_t month = 1;
-    uint8_t day = 1;
-    uint8_t hour = 0;
-    uint8_t minute = 0;
-    uint8_t second = 0;
+    // fat percentage
+    if (!readUInt16(twoByte)) {
+        return false;
+    }
+    measurement.fatPercentage = twoByte / 10.0f;
+
+    // timestamp
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
 
     if (offset + 7 > length) {
         Serial.println("Body composition payload truncated (timestamp)");
         return false;
     }
-    year = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-    month = data[offset + 2];
-    day = data[offset + 3];
-    hour = data[offset + 4];
-    minute = data[offset + 5];
-    second = data[offset + 6];
-    offset += 7;
+
+    if (!readUInt16(year)) {
+        return false;
+    }
+
+    month = data[offset++];
+    day = data[offset++];
+    hour = data[offset++];
+    minute = data[offset++];
+    second = data[offset++];
 
     measurement.pID = 0xFF;
     if (offset >= length) {
@@ -78,30 +96,30 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
     }
 
     // skip basal metabolism
-    if (!readUInt16(raw)) {
+    if (!readUInt16(twoByte)) {
         return false;
     }
 
     measurement.musclePercentage = 0.0f;
-    raw = 0;
-    if (!readUInt16(raw)) {
+    twoByte = 0;
+    if (!readUInt16(twoByte)) {
         return false;
     }
-    measurement.musclePercentage = raw / 10.0f;
+    measurement.musclePercentage = twoByte / 10.0f;
 
     float bodyWaterMassKg = 0.0f;
-    raw = 0;
-    if (!readUInt16(raw)) {
+    twoByte = 0;
+    if (!readUInt16(twoByte)) {
         return false;
     }
-    bodyWaterMassKg = decodeMassKg(raw);
+    bodyWaterMassKg = decodeMassKg(twoByte);
 
     measurement.weightKg = 0.0f;
-    raw = 0;
-    if (!readUInt16(raw)) {
+    twoByte = 0;
+    if (!readUInt16(twoByte)) {
         return false;
     }
-    measurement.weightKg = decodeMassKg(raw);
+    measurement.weightKg = decodeMassKg(twoByte);
 
     snprintf(measurement.time, sizeof(measurement.time), "%04u-%02u-%02uT%02u:%02u:%02uZ", year, month, day, hour, minute, second);
 
