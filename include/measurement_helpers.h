@@ -50,16 +50,11 @@ bool buildMeasurementFromBodyCompositionFrame(const uint8_t *data, size_t length
         return false;
     }
 
+    // map the raw data to the struct
     const BodyCompositionFrame* frame = reinterpret_cast<const BodyCompositionFrame*>(data);
 
     measurement.fatPercentage = frame->fatPercentage / 10.0f;
-
     measurement.pID = frame->userID;
-    if (measurement.pID == 0xFF) {
-        Serial.println("Body composition payload missing user id");
-        return false;
-    }
-
     measurement.musclePercentage = frame->musclePercentage / 10.0f;
 
     float bodyWaterMassKg = decodeMassKg(frame->waterMass);
